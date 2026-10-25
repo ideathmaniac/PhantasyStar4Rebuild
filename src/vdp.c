@@ -197,6 +197,19 @@ static inline uint8_t tile_pixel(uint16_t ent, int px, int py)
 }
 
 uint8_t vdp_tile_pixel(uint16_t ent, int px, int py) { return tile_pixel(ent, px, py); }
+uint32_t vdp_color(int idx) { if (!rgb_init) init_rgb(); return cram_rgb(idx, 0); }
+
+/* HD packs: which tile pixel each screen pixel shows (see md.h VSRC_*) */
+int g_hd_track;
+uint32_t g_src[MD_VIS_LINES][MD_W_MAX];
+uint32_t g_ws_src;                      /* set by g_ws_pixel for the pixel it returned */
+static uint32_t sa[MD_W_MAX], sb[MD_W_MAX], ss[MD_W_MAX];
+/* ent: name table entry (flips apply), px/py: position as drawn */
+uint32_t vdp_make_src(uint16_t ent, int px, int py)
+{
+    int cx = (ent & 0x0800) ? 7 - px : px, cy = (ent & 0x1000) ? 7 - py : py;
+    return VSRC_VALID | (ent & 0x7FF) | (((ent >> 13) & 3) << 11) | (((ent >> 11) & 3) << 13) | ((uint32_t)cx << 15) | ((uint32_t)cy << 18);
+}
 
 /* out[i] is screen x = i - E, for i in [0, W + 2E) */
 static void draw_plane(uint8_t *out, int line, int W, int E, uint32_t base, int plane /*0 A,1 B*/)
@@ -209,7 +222,12 @@ static void draw_plane(uint8_t *out, int line, int W, int E, uint32_t base, int 
     int hs = ((V.vram[ha] << 8) | V.vram[ha | 1]) & 0x3FF;
     int vcol = (V.reg[11] & 4) != 0;
     for (int x = -E; x < W + E; x++) {
-        if ((x < 0 || x >= W) && g_ws_pixel) { out[x + E] = g_ws_pixel(plane, x, line); continue; }
+        if ((x < 0 || x >= W) && g_ws_pixel) {
+            g_ws_src = 0;
+            out[x + E] = g_ws_pixel(plane, x, line);
+            if (g_hd_track) (plane ? sb : sa)[x + E] = g_ws_src;
+            continue;
+        }
         int col = x < 0 ? 0 : x >= W ? W - 1 : x;
         int vs = vcol ? V.vsram[((col >> 4) * 2 + plane) % 40] : V.vsram[plane];
         int py = (line + vs) & (ph * 8 - 1);
@@ -217,10 +235,11 @@ static void draw_plane(uint8_t *out, int line, int W, int E, uint32_t base, int 
         uint32_t ea = (base + ((py >> 3) * pw + (px >> 3)) * 2) & 0xFFFF;
         uint16_t ent = (uint16_t)((V.vram[ea] << 8) | V.vram[ea | 1]);
         out[x + E] = tile_pixel(ent, px & 7, py & 7);
+        if (g_hd_track) (plane ? sb : sa)[x + E] = vdp_make_src(ent, px & 7, py & 7);
     }
 }
 
-static void draw_window_span(uint8_t *out, int line, int x0, int x1)
+static void draw_window_span(uint8_t *out, uint32_t *src, int line, int x0, int x1)
 {
     uint32_t base = h40() ? ((V.reg[3] & 0x3C) << 10) : ((V.reg[3] & 0x3E) << 10);
     int pw = h40() ? 64 : 32;
@@ -228,6 +247,7 @@ static void draw_window_span(uint8_t *out, int line, int x0, int x1)
         uint32_t ea = (base + ((line >> 3) * pw + (x >> 3)) * 2) & 0xFFFF;
         uint16_t ent = (uint16_t)((V.vram[ea] << 8) | V.vram[ea | 1]);
         out[x] = tile_pixel(ent, x & 7, line & 7);
+        if (g_hd_track) src[x] = vdp_make_src(ent, x & 7, line & 7);
     }
 }
 
@@ -261,7 +281,12 @@ static void draw_sprites(uint8_t *out, int line, int W, int E)
                     if (sx < -E || sx >= W + E || out[sx + E]) continue;
                     int tp = (at & 0x0800) ? 7 - p : p;
                     uint8_t px = tile_pixel((uint16_t)(ent & ~0x1800), tp, row & 7);
-                    if (px) out[sx + E] = px;
+                    if (px) {
+                        out[sx + E] = px;
+                        if (g_hd_track)
+                            ss[sx + E] = VSRC_VALID | (ent & 0x7FF) | (((at >> 13) & 3) << 11) | (((at >> 11) & 3) << 13) |
+                                         ((uint32_t)tp << 15) | ((uint32_t)(row & 7) << 18);
+                    }
                 }
             }
         }
@@ -284,7 +309,11 @@ void vdp_render_line(int line)
     g_fb_width = TW;
     uint32_t *dst = g_fb[line];
     uint32_t bd = cram_rgb(V.reg[7] & 0x3F, 0);
-    if (!(V.reg[1] & 0x40)) { for (int x = 0; x < MD_W_MAX; x++) dst[x] = bd; return; }
+    if (!(V.reg[1] & 0x40)) {
+        for (int x = 0; x < MD_W_MAX; x++) dst[x] = bd;
+        if (g_hd_track) memset(g_src[line], 0, sizeof g_src[line]);
+        return;
+    }
 
     static uint8_t la[MD_W_MAX], lb[MD_W_MAX], ls[MD_W_MAX];
     draw_plane(lb, line, W, E, (V.reg[4] & 7) << 13, 1);
@@ -293,42 +322,50 @@ void vdp_render_line(int line)
     int vp = (V.reg[18] & 0x1F) * 8, down = V.reg[18] & 0x80;
     int hp = (V.reg[17] & 0x1F) * 16, right = V.reg[17] & 0x80;
     uint8_t *law = la + E;
-    if (down ? line >= vp : line < vp) draw_window_span(law, line, 0, W);
+    uint32_t *saw = sa + E;
+    if (down ? line >= vp : line < vp) draw_window_span(law, saw, line, 0, W);
     else if (hp) {
-        if (right) { if (hp < W) draw_window_span(law, line, hp, W); }
-        else draw_window_span(law, line, 0, hp < W ? hp : W);
+        if (right) { if (hp < W) draw_window_span(law, saw, line, hp, W); }
+        else draw_window_span(law, saw, line, 0, hp < W ? hp : W);
     }
     draw_sprites(ls, line, W, E);
 
     int sh = (V.reg[12] & 0x08) != 0;
+    uint32_t *srow = g_hd_track ? g_src[line] : 0;
     for (int x = 0; x < TW; x++) {
         uint8_t a = la[x], b = lb[x], s = ls[x];
-        uint8_t pix = 0; int lvl = 0;
-        /* priority order: S hi, A hi, B hi, S lo, A lo, B lo */
-        uint8_t order[6] = { 0 };
+        uint8_t val[3] = { s, a, b };
+        uint8_t pix = 0; int lvl = 0, win = -1;
+        /* priority order: S hi, A hi, B hi, S lo, A lo, B lo (layers: 0 S, 1 A, 2 B) */
+        int8_t order[6];
         int n = 0;
-        if (s & 0x80) order[n++] = s;
-        if (a & 0x80) order[n++] = a;
-        if (b & 0x80) order[n++] = b;
-        if (s && !(s & 0x80)) order[n++] = s;
-        if (a && !(a & 0x80)) order[n++] = a;
-        if (b && !(b & 0x80)) order[n++] = b;
+        if (s & 0x80) order[n++] = 0;
+        if (a & 0x80) order[n++] = 1;
+        if (b & 0x80) order[n++] = 2;
+        if (s && !(s & 0x80)) order[n++] = 0;
+        if (a && !(a & 0x80)) order[n++] = 1;
+        if (b && !(b & 0x80)) order[n++] = 2;
         if (sh) {
             lvl = ((a & 0x80) || (b & 0x80)) ? 0 : 1;
             for (int i = 0; i < n; i++) {
-                uint8_t p = order[i];
-                if (p == s && (p & 0x3F) == 0x3E) { if (lvl < 2) lvl++; continue; }  /* pal 3 col 14: highlight */
-                if (p == s && (p & 0x3F) == 0x3F) { lvl = lvl == 2 ? 0 : 1; continue; } /* pal 3 col 15: shadow */
-                pix = p;
-                if (p == s && (s & 0x80)) lvl = 0;
+                uint8_t p = val[order[i]];
+                if (order[i] == 0 && (p & 0x3F) == 0x3E) { if (lvl < 2) lvl++; continue; }  /* pal 3 col 14: highlight */
+                if (order[i] == 0 && (p & 0x3F) == 0x3F) { lvl = lvl == 2 ? 0 : 1; continue; } /* pal 3 col 15: shadow */
+                pix = p; win = order[i];
+                if (order[i] == 0 && (s & 0x80)) lvl = 0;
                 break;
             }
             int col = pix ? (pix & 0x3F) : (V.reg[7] & 0x3F);
             dst[x] = cram_rgb(col, lvl == 1 ? 1 : lvl == 2 ? 2 : 0);
         } else {
-            pix = n ? order[0] : 0;
+            if (n) { win = order[0]; pix = val[win]; }
             dst[x] = pix ? cram_rgb(pix & 0x3F, 0) : bd;
+        }
+        if (srow) {
+            uint32_t sv = win == 0 ? ss[x] : win == 1 ? sa[x] : win == 2 ? sb[x] : 0;
+            srow[x] = sv ? sv | ((uint32_t)lvl << 21) : 0;
         }
     }
     for (int x = TW; x < MD_W_MAX; x++) dst[x] = 0;
+    if (srow) for (int x = TW; x < MD_W_MAX; x++) srow[x] = 0;
 }

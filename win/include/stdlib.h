@@ -7,6 +7,7 @@ void *realloc(void *, size_t);
 void free(void *);
 char *getenv(const char *);
 int atoi(const char *);
+int abs(int);
 long atol(const char *);
 void exit(int);
 void abort(void);

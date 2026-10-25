@@ -104,6 +104,8 @@ const char *d3d_info(void) { return info; }
 static void *dev, *ctx, *swap, *bb_rtv;
 static int bb_w, bb_h, flip_model;
 static void *tex_src, *srv_src;                   /* the frame (dynamic, CPU writes) */
+static void *tex_big, *srv_big;                   /* HD pack pictures, up to 2048 x 1024 */
+static int tw = TW, th = TH;                      /* size of the texture holding the current picture */
 static void *tex_dith, *srv_dith, *rtv_dith;      /* dithering blended */
 static void *tex_edge, *srv_edge, *rtv_edge;      /* FX_SMOOTH pass 1 */
 static void *tex_ovl, *srv_ovl;                   /* overlays (menu), window sized */
@@ -268,7 +270,7 @@ static void set_consts(float x0, float y0, float x1, float y1, float u, float v,
     consts_t *k = (consts_t *)m.pData;
     k->rect[0] = x0; k->rect[1] = y0; k->rect[2] = x1; k->rect[3] = y1;
     k->uvx[0] = u; k->uvx[1] = v; k->uvx[2] = u0; k->uvx[3] = v0;
-    k->tsize[0] = TW; k->tsize[1] = TH; k->fsize[0] = (float)W; k->fsize[1] = (float)H;
+    k->tsize[0] = (float)tw; k->tsize[1] = (float)th; k->fsize[0] = (float)W; k->fsize[1] = (float)H;
     k->scale[0] = sx; k->scale[1] = sy; k->extra = extra; k->pad = 0;
     C_Unmap(ctx, cbuf, 0);
 }
@@ -302,16 +304,23 @@ void d3d_frame(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w,
     if (cw < 1 || ch < 1) return;
     resize_if_needed(cw, ch);
     if (!bb_rtv) return;
-    if (W > TW) W = TW;
-    if (H > TH) H = TH;
+    void *up_tex = tex_src, *up_srv = srv_src;
+    tw = TW; th = TH;
+    if (W > TW || H > TH) {                       /* an HD pack picture: sharp or soft scaling only */
+        if (!tex_big && !make_tex(&tex_big, &srv_big, 0, 2048, 1024, FMT_B8G8R8A8, 1)) { tex_big = 0; return; }
+        up_tex = tex_big; up_srv = srv_big; tw = 2048; th = 1024;
+        mode = FX_PIXELS; dither = 0;
+    }
+    if (W > tw) W = tw;
+    if (H > th) H = th;
 
     MAPPED m;
-    if (!FAILED(C_Map(ctx, tex_src, 0, MAP_WRITE_DISCARD, 0, &m))) {
+    if (!FAILED(C_Map(ctx, up_tex, 0, MAP_WRITE_DISCARD, 0, &m))) {
         for (int r = 0; r < H; r++) memcpy((uint8_t *)m.pData + (size_t)r * m.RowPitch, fb + (size_t)r * pitch, (size_t)W * 4);
-        C_Unmap(ctx, tex_src, 0);
+        C_Unmap(ctx, up_tex, 0);
     }
-    float u = (float)W / TW, v = (float)H / TH;
-    void *src = srv_src;
+    float u = (float)W / tw, v = (float)H / th;
+    void *src = up_srv;
     if (dither) {
         set_consts(-1, 1, 1, -1, u, v, 0, 0, W, H, 1, 1, 0);
         pass(rtv_dith, W, H, ps_dither, src, 0);

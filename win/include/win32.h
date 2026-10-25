@@ -130,6 +130,18 @@ uint64_t GetTickCount64(void);
 #define GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS 4
 #define MB_TOPMOST 0x40000
 #define MB_SETFOREGROUND 0x10000
+/* kernel32: folder listing */
+typedef struct { DWORD lo, hi; } FILETIME_;
+typedef struct {
+    DWORD dwFileAttributes; FILETIME_ ftCreationTime, ftLastAccessTime, ftLastWriteTime;
+    DWORD nFileSizeHigh, nFileSizeLow, dwReserved0, dwReserved1;
+    wchar_t cFileName[260]; wchar_t cAlternateFileName[14];
+} WIN32_FIND_DATAW;
+HANDLE FindFirstFileW(LPCWSTR, WIN32_FIND_DATAW *);
+BOOL FindNextFileW(HANDLE, WIN32_FIND_DATAW *);
+BOOL FindClose(HANDLE);
+/* shell32 */
+HINSTANCE ShellExecuteW(HWND, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, int);
 /* user32 */
 UINT_PTR SetTimer(HWND, UINT_PTR, UINT, void *);
 BOOL KillTimer(HWND, UINT_PTR);

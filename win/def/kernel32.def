@@ -43,3 +43,6 @@ TerminateProcess
 GetTickCount64
 CreateMutexW
 GetLastError
+FindFirstFileW
+FindNextFileW
+FindClose

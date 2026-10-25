@@ -45,3 +45,7 @@ log
 pow
 sqrt
 floor
+strncmp
+strchr
+_strdup
+abs

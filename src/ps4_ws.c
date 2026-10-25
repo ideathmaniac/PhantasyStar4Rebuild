@@ -108,6 +108,7 @@ static uint8_t ws_pixel(int plane, int sx, int line)
     int t = map_tile(snap_maps, snap_blocks, plane, plane ? snap_wb : snap_wa, plane ? snap_hb : snap_ha,
                      plane ? snap_maskb : 0xBFFF, wx, wy);
     if (t < 0) return 0;
+    if (g_hd_track) g_ws_src = vdp_make_src((uint16_t)t, wx & 7, wy & 7);
     return vdp_tile_pixel((uint16_t)t, wx & 7, wy & 7);
 }
 

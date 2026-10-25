@@ -21,8 +21,8 @@ int main(int argc, char **argv)
     if (argc < 7) return 1;
     int mode = atoi(argv[3]), dith = atoi(argv[4]), cw = atoi(argv[5]), ch = atoi(argv[6]), bil = argc > 7 ? atoi(argv[7]) : 0;
     FILE *f = fopen(argv[1], "rb"); int W, H, mx; fscanf(f, "P6 %d %d %d", &W, &H, &mx); fgetc(f);
-    static uint32_t fb[256 * 448]; unsigned char px[3];
-    for (int i = 0; i < W * H; i++) { fread(px, 1, 3, f); fb[(i / W) * 448 + i % W] = (px[0] << 16) | (px[1] << 8) | px[2]; }
+    uint32_t *fb = malloc((size_t)W * H * 4); unsigned char px[3];
+    for (int i = 0; i < W * H; i++) { fread(px, 1, 3, f); fb[i] = (px[0] << 16) | (px[1] << 8) | px[2]; }
     fclose(f);
     EGLDisplay d = eglGetPlatformDisplay(0x31DD /* SURFACELESS_MESA */, 0, 0);
     if (!eglInitialize(d, 0, 0)) { fprintf(stderr, "egl init %x\n", eglGetError()); return 1; }
@@ -37,10 +37,11 @@ int main(int argc, char **argv)
     if (!glfx_init(gp)) { fprintf(stderr, "glfx: %s\n", glfx_error()); return 1; }
     glClearColor(0, 0, 0, 1); glClear(0x4000);
     /* same placement as the front end: 4:3 pixel aspect, centred */
+    int k = H / 224, LW = W / k;                  /* HD pictures: k pixels per console pixel */
     double par = (4.0 / 3.0 * 224.0) / 320.0, sy = (double)ch / 224, sx = sy * par;
-    if (sx * W > cw) { sx = (double)cw / W; sy = sx / par; }
-    int w = (int)(W * sx + 0.5), h = (int)(224 * sy + 0.5), x = (cw - w) / 2, y = (ch - h) / 2;
-    glfx_draw(fb, W, H, 448, x, y, w, h, cw, ch, mode, bil, dith);
+    if (sx * LW > cw) { sx = (double)cw / LW; sy = sx / par; }
+    int w = (int)(LW * sx + 0.5), h = (int)(224 * sy + 0.5), x = (cw - w) / 2, y = (ch - h) / 2;
+    glfx_draw(fb, W, H, W, x, y, w, h, cw, ch, mode, bil, dith);
     unsigned char *o = malloc((size_t)cw * ch * 4);
     glReadPixels(0, 0, cw, ch, 0x1908, 0x1401, o);
     f = fopen(argv[2], "wb"); fprintf(f, "P6\n%d %d\n255\n", cw, ch);

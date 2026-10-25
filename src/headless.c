@@ -10,6 +10,36 @@
 #include "cpu.h"
 #include "run.h"
 #include "sound.h"
+#include "hdpack.h"
+#include <dirent.h>
+#include <sys/stat.h>
+
+/* HD pack file access for the headless runner (HD=<pack folder>) */
+static char hd_root[400];
+static int hdw(const char *rel, const void *d, size_t n)
+{
+    char p[800]; snprintf(p, sizeof p, "%s/%s", hd_root, rel);
+    for (char *c = p + 1; *c; c++) if (*c == '/') { *c = 0; mkdir(p, 0755); *c = '/'; }
+    FILE *f = fopen(p, "wb"); if (!f) return 0;
+    size_t w = fwrite(d, 1, n, f); fclose(f); return w == n;
+}
+static uint8_t *hdr(const char *rel, size_t *n)
+{
+    char p[800]; snprintf(p, sizeof p, "%s/%s", hd_root, rel);
+    FILE *f = fopen(p, "rb"); if (!f) return 0;
+    fseek(f, 0, SEEK_END); long sz = ftell(f); fseek(f, 0, SEEK_SET);
+    uint8_t *b = malloc(sz > 0 ? (size_t)sz : 1); *n = fread(b, 1, (size_t)(sz > 0 ? sz : 0), f); fclose(f); return b;
+}
+static void hdl(const char *rel, void (*cb)(const char *, void *), void *u)
+{
+    char p[800]; snprintf(p, sizeof p, "%s/%s", hd_root, rel);
+    DIR *d = opendir(p); if (!d) return;
+    struct dirent *e;
+    while ((e = readdir(d))) if (e->d_name[0] != '.') cb(e->d_name, u);
+    closedir(d);
+}
+static void hdlog(const char *m) { fprintf(stderr, "%s\n", m); }
+static uint32_t hd_frame[224 * 4][448 * 4];
 
 static struct { uint64_t frame; uint16_t pad; } inp[4096];
 static int ninp, inp_pos;
@@ -92,6 +122,14 @@ int main(int argc, char **argv)
     { void ps4_recomp_install(void); if (!getenv("INTERP_ONLY")) ps4_recomp_install(); }
 #endif
     if (getenv("WS")) { void ps4_ws_install(void); ps4_ws_install(); g_ws_ext = atoi(getenv("WS")); }
+    if (getenv("HD")) {
+        snprintf(hd_root, sizeof hd_root, "%s", getenv("HD"));
+        hd_io_t io = { hdw, hdr, hdl, hdlog };
+        hd_set_io(&io);
+        g_hd_track = 1;
+        hd_load();
+        if (getenv("HD_IMPORT")) { char r[300]; hd_import(r, sizeof r); fprintf(stderr, "import: %s\n", r); hd_load(); }
+    }
     FILE *log = logp ? fopen(logp, "w") : NULL;
     FILE *wav = wavp ? fopen(wavp, "wb") : NULL;
     long wav_frames = 0;
@@ -118,6 +156,20 @@ int main(int argc, char **argv)
         if (outdir && every && (f + 1) % every == 0) {
             char p[512]; snprintf(p, sizeof p, "%s/f%06ld.ppm", outdir, f + 1);
             save_ppm(p);
+            int hw, hh;
+            if (hd_root[0] && hd_compose(&hd_frame[0][0], 448 * 4, &hw, &hh)) {
+                snprintf(p, sizeof p, "%s/h%06ld.ppm", outdir, f + 1);
+                FILE *hf = fopen(p, "wb");
+                fprintf(hf, "P6\n%d %d\n255\n", hw, hh);
+                for (int y = 0; y < hh; y++) for (int x = 0; x < hw; x++) { uint32_t c = hd_frame[y][x]; fputc(c >> 16, hf); fputc((c >> 8) & 255, hf); fputc(c & 255, hf); }
+                fclose(hf);
+                fprintf(stderr, "frame %ld: hd coverage %.1f%%\n", f + 1, hd_coverage() * 100);
+            }
+        }
+        if (hd_root[0]) {
+            if (getenv("HD_AUTO")) hd_auto_capture();
+            const char *cl = getenv("HD_CAPTURE");
+            for (const char *c = cl; c && *c;) { long v = atol(c); if (v == f + 1) hd_capture(); c = strchr(c, ','); if (c) c++; }
         }
     }
     if (getenv("SRAM_OUT")) { FILE *sf = fopen(getenv("SRAM_OUT"), "wb"); fwrite(g_sram, 1, sizeof g_sram, sf); fclose(sf); fprintf(stderr, "sram dirty %d\n", g_sram_dirty); }

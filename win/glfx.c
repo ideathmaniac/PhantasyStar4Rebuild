@@ -165,7 +165,11 @@ static int link(prog_t *p, const char *fs, const char *name)
     return 1;
 }
 
-static void new_tex(GLuint *t, int filter)
+static int tw = TW, th = TH;                /* size of the texture holding the current picture */
+static GLuint tex_big;                     /* HD pack pictures, up to 2048 x 1024 */
+static void new_tex_sized(GLuint *t, int filter, int w, int h);
+static void new_tex(GLuint *t, int filter) { new_tex_sized(t, filter, TW, TH); }
+static void new_tex_sized(GLuint *t, int filter, int w, int h)
 {
     glGenTextures(1, t);
     glBindTexture(GL_TEXTURE_2D, *t);
@@ -173,7 +177,7 @@ static void new_tex(GLuint *t, int filter)
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, filter);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, filter);
-    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, TW, TH, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, 0);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, 0);
 }
 
 static int new_fbo(GLuint *fbo, GLuint tex)
@@ -218,7 +222,7 @@ static void use(prog_t *p, GLuint src, int W, int H, float sx, float sy)
     pActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, src);
     pUniform1i(p->src, 0);
-    pUniform2f(p->tsize, TW, TH);
+    pUniform2f(p->tsize, (float)tw, (float)th);
     pUniform2f(p->fsize, (float)W, (float)H);
     if (p->scale >= 0) pUniform2f(p->scale, sx, sy);
 }
@@ -240,25 +244,32 @@ static void to_fbo(GLuint fbo, int W, int H)
     glViewport(0, 0, W, H);
     glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, W, 0, H, -1, 1);
     glMatrixMode(GL_MODELVIEW); glLoadIdentity();
-    quad(0, 0, (float)W, (float)H, (float)W / TW, (float)H / TH);
+    quad(0, 0, (float)W, (float)H, (float)W / tw, (float)H / th);
 }
 
 void glfx_draw(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w, int h, int cw, int ch,
                int mode, int bilinear, int dither)
 {
     if (!ready) return;
-    if (W > TW) W = TW;
-    if (H > TH) H = TH;
+    GLuint up = tex_src;
+    tw = TW; th = TH;
+    if (W > TW || H > TH) {                 /* an HD pack picture: sharp or soft scaling only */
+        if (!tex_big) new_tex_sized(&tex_big, GL_LINEAR, 2048, 1024);
+        up = tex_big; tw = 2048; th = 1024;
+        mode = FX_PIXELS; dither = 0;
+    }
+    if (W > tw) W = tw;
+    if (H > th) H = th;
     glDisable(GL_BLEND);
     glEnable(GL_TEXTURE_2D);
     glColor4f(1, 1, 1, 1);
-    glBindTexture(GL_TEXTURE_2D, tex_src);
+    glBindTexture(GL_TEXTURE_2D, up);
     glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, pitch);
     glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W, H, GL_BGRA_EXT, GL_UNSIGNED_BYTE, fb);
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 
-    GLuint src = tex_src;
+    GLuint src = up;
     if (dither) {
         use(&P_DITHER, src, W, H, 1, 1);
         to_fbo(fbo_dith, W, H);
@@ -287,7 +298,7 @@ void glfx_draw(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w,
         use(&P_PIXELS, src, W, H, sx, sy);
         pUniform1f(P_PIXELS.extra, bilinear ? 1.0f : 0.0f);
     }
-    quad((float)x, (float)y, (float)w, (float)h, (float)W / TW, (float)H / TH);
+    quad((float)x, (float)y, (float)w, (float)h, (float)W / tw, (float)H / th);
     pUseProgram(0);
     pActiveTexture(GL_TEXTURE0);
 }

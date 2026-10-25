@@ -15,6 +15,7 @@
 #include "diag.h"
 #include "glfx.h"
 #include "d3dfx.h"
+#include "../src/hdpack.h"
 
 int _fltused = 0x9875;
 
@@ -40,12 +41,14 @@ typedef struct {
     int32_t pad_mode, vsync, use_gl;       /* added in 0.3 */
     int32_t fx_mode, fx_dither;            /* added in 0.9 */
     int32_t renderer;                      /* added in 0.10: 0 Direct3D 11, 1 OpenGL, 2 GDI */
+    int32_t hd_pack, hd_auto;              /* added in 0.12 */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
 #define CFG_V2_SIZE (offsetof(cfg_t, pad_mode))
 #define CFG_V3_SIZE (offsetof(cfg_t, fx_mode))
 #define CFG_V4_SIZE (offsetof(cfg_t, renderer))
+#define CFG_V5_SIZE (offsetof(cfg_t, hd_pack))
 static cfg_t C;
 
 /* pad input codes */
@@ -68,6 +71,7 @@ static void cfg_defaults(void)
     C.rewind = 1; C.autosave_min = 5; C.volume = 100; C.slot = 1;
     C.pad_mode = 0; C.vsync = 1; C.use_gl = 1;
     C.fx_mode = FX_PIXELS; C.fx_dither = 1; C.renderer = 0;
+    C.hd_pack = 1; C.hd_auto = 0;
     static const uint16_t k[NACT][NKEY] = {
         { VK_UP, 'W' }, { VK_DOWN, 'S' }, { VK_LEFT, 'A' }, { VK_RIGHT, 'D' },
         { 'Z', 'J' }, { 'X', 'K' }, { 'C', VK_SPACE }, { VK_RETURN, 0 },
@@ -160,10 +164,10 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
         memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
         if (n < CFG_V4_SIZE && C.hd) C.fx_mode = FX_SMOOTH;
-        if (n < sizeof C) C.renderer = C.use_gl ? 0 : 2;
+        if (n < CFG_V5_SIZE) C.renderer = C.use_gl ? 0 : 2;
     }
     if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
     if (C.renderer < 0 || C.renderer > 2) C.renderer = 0;
@@ -226,6 +230,55 @@ static int state_load(int slot)
     if (ok) rw_clear();
     return ok;
 }
+
+/* ======================================================================
+ * HD packs: files under hdpack\ next to PS4.exe
+ * ====================================================================== */
+static wchar_t hd_dir[700];
+static void hd_wpath(wchar_t *out, size_t cap, const char *rel)
+{
+    wcscpy(out, hd_dir);
+    size_t n = wcslen(out);
+    int k = MultiByteToWideChar(65001, 0, rel, -1, out + n, (int)(cap - n));
+    if (k <= 0) out[n] = 0;
+    for (wchar_t *c = out + n; *c; c++) if (*c == L'/') *c = L'\\';
+}
+static int hd_io_write(const char *rel, const void *d, size_t n)
+{
+    wchar_t p[900]; hd_wpath(p, 900, rel);
+    CreateDirectoryW(hd_dir, 0);
+    for (wchar_t *c = p + wcslen(hd_dir); *c; c++) if (*c == L'\\') { *c = 0; CreateDirectoryW(p, 0); *c = L'\\'; }
+    FILE *f = _wfopen(p, L"wb");
+    if (!f) return 0;
+    size_t w = fwrite(d, 1, n, f);
+    fclose(f);
+    return w == n;
+}
+static uint8_t *hd_io_read(const char *rel, size_t *n)
+{
+    wchar_t p[900]; hd_wpath(p, 900, rel);
+    *n = 0;
+    return read_file(p, n);
+}
+static void hd_io_list(const char *rel, void (*cb)(const char *, void *), void *u)
+{
+    wchar_t p[900]; hd_wpath(p, 900, rel);
+    wcscat(p, L"\\*");
+    WIN32_FIND_DATAW fd;
+    HANDLE h = FindFirstFileW(p, &fd);
+    if (h == INVALID_HANDLE_VALUE) return;
+    do {
+        if (fd.dwFileAttributes & 0x10) continue;          /* folders */
+        char name[600];
+        if (WideCharToMultiByte(65001, 0, fd.cFileName, -1, name, sizeof name, 0, 0) > 0) cb(name, u);
+    } while (FindNextFileW(h, &fd));
+    FindClose(h);
+}
+static void hd_io_log(const char *m) { logw("%s", m); }
+static uint32_t hd_img[224 * 4 * 448 * 4];
+static int fx_ok_ext(void);
+static void hd_capture_now(void);
+static int hd_on(void) { return C.hd_pack && fx_ok_ext() && hd_tiles() > 0; }
 
 /* ======================================================================
  * Audio (waveOut). The game is paced by the clock (see run()); the sound
@@ -613,6 +666,7 @@ static int menu_rect[4], status_rect[4];   /* x, y, w, h of overlay boxes drawn 
 static HDC gl_dc;
 static HGLRC gl_rc;
 static int gl_ok, gl_npot, fx_ok, d3d_ok;
+static int fx_ok_ext(void) { return fx_ok; }
 static void *gl_getproc(const char *n)
 {
     void *p = wglGetProcAddress(n);
@@ -703,8 +757,14 @@ static void present(void)
         draw_status();
     }
 
+    /* HD pack: the picture drawn from the replacement tiles, k times larger */
+    const uint32_t *pic = fb; int PW = W, PH = H, ppitch = MD_W_MAX;
+    if (hd_on()) {
+        int hw, hh;
+        if (hd_compose(hd_img, 448 * 4, &hw, &hh)) { pic = hd_img; PW = hw; PH = hh; ppitch = 448 * 4; }
+    }
     if (d3d_ok) {
-        d3d_frame(fb, W, H, MD_W_MAX, x, y, w, h, cw, ch, C.fx_mode, C.smooth, C.fx_dither);
+        d3d_frame(pic, PW, PH, ppitch, x, y, w, h, cw, ch, C.fx_mode, C.smooth, C.fx_dither);
         int *rects[2] = { menu_rect, status_rect };
         if (cw <= back_w && ch <= back_h)
             for (int k = 0; k < 2; k++) {
@@ -732,7 +792,7 @@ static void present(void)
         glMatrixMode(GL_MODELVIEW); glLoadIdentity();
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
         if (fx_ok) {
-            glfx_draw(fb, W, H, MD_W_MAX, x, y, w, h, cw, ch, C.fx_mode, C.smooth, C.fx_dither);
+            glfx_draw(pic, PW, PH, ppitch, x, y, w, h, cw, ch, C.fx_mode, C.smooth, C.fx_dither);
         } else if (cpu_hd) {
             glBindTexture(GL_TEXTURE_2D, tex_hd);
             glPixelStorei(GL_UNPACK_ROW_LENGTH, MD_W_MAX * 4);
@@ -824,7 +884,7 @@ static void fit_window(void)
 /* ======================================================================
  * Overlay menu
  * ====================================================================== */
-enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP };
+enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP, M_HD };
 static int m_page, m_sel, m_wait_bind = -1;   /* action index waiting for a key / pad input */
 static int m_confirm_quit;
 
@@ -879,6 +939,22 @@ static void build_menu(void)
             else _snwprintf(rv, 79, L"%s (после перезапуска)", rn[C.renderer]);
             add(L"Вывод изображения", rv);
         }
+        add(L"HD-пакет графики", L"▸");
+        add(L"Назад", 0);
+        break; }
+    case M_HD: {
+        wcscpy(m_title, L"HD-пакет графики");
+        static wchar_t v1[80], v2[80];
+        if (!fx_ok) wcscpy(v1, L"нужен Direct3D 11 или OpenGL 2.0");
+        else if (!hd_tiles()) wcscpy(v1, L"пакет пуст");
+        else _snwprintf(v1, 79, L"%s (плиток: %d, ×%d)", C.hd_pack ? L"вкл" : L"выкл", hd_tiles(), hd_scale());
+        add(L"Использовать HD-пакет", v1);
+        if (hd_on()) _snwprintf(v2, 79, L"%d%%", (int)(hd_coverage() * 100 + 0.5)); else wcscpy(v2, L"—");
+        add(L"Заменено на этом экране", v2);
+        add(L"Снимок графики сейчас (F9)", 0);
+        add(L"Автоснимки новой графики", onoff(C.hd_auto));
+        add(L"Собрать пакет из hdpack\\upscaled", 0);
+        add(L"Открыть папку hdpack", 0);
         add(L"Назад", 0);
         break; }
     case M_SPEED: {
@@ -1007,7 +1083,8 @@ static void menu_act(int dir)
         case 5: toggle_fullscreen(); break;
         case 6: C.vsync = !C.vsync; break;
         case 7: C.renderer = (C.renderer + 3 + d) % 3; C.use_gl = C.renderer != 2; set_status(L"вступит в силу после перезапуска"); break;
-        case 8: if (!dir) { m_page = M_MAIN; m_sel = 5; } break;
+        case 8: if (!dir) { m_page = M_HD; m_sel = 0; } break;
+        case 9: if (!dir) { m_page = M_MAIN; m_sel = 5; } break;
         }
     } else if (m_page == M_SPEED) {
         int d = dir ? dir : 1;
@@ -1033,6 +1110,19 @@ static void menu_act(int dir)
         } else { m_sel = m_page == M_KEYS ? 7 : 8; m_page = M_MAIN; }
     } else if (m_page == M_HELP) {
         if (!dir) { m_page = M_MAIN; m_sel = 10; }
+    } else if (m_page == M_HD) {
+        switch (i) {
+        case 0: C.hd_pack = !C.hd_pack; break;
+        case 2: if (!dir) { menu_set_open(0); hd_capture_now(); } break;
+        case 3: C.hd_auto = !C.hd_auto; set_status(C.hd_auto ? L"новая графика будет сниматься сама" : L"автоснимки выключены"); break;
+        case 4: if (!dir) {
+            char r[300]; hd_import(r, sizeof r);
+            wchar_t m[300]; MultiByteToWideChar(65001, 0, r, -1, m, 299);
+            set_status(m);
+        } break;
+        case 5: if (!dir) { CreateDirectoryW(hd_dir, 0); ShellExecuteW(0, L"open", hd_dir, 0, 0, 1); } break;
+        case 6: if (!dir) { m_page = M_VIDEO; m_sel = 8; } break;
+        }
     }
 }
 
@@ -1040,6 +1130,7 @@ static void menu_back(void)
 {
     if (m_wait_bind >= 0) { m_wait_bind = -1; return; }
     if (m_page == M_MAIN) menu_set_open(0);
+    else if (m_page == M_HD) { m_page = M_VIDEO; m_sel = 8; }
     else { int from = m_page; m_page = M_MAIN; m_sel = from == M_VIDEO ? 5 : from == M_SPEED ? 6 : from == M_KEYS ? 7 : from == M_PAD ? 8 : 10; }
 }
 
@@ -1099,6 +1190,17 @@ static void menu_pad(void)
 /* ======================================================================
  * Window procedure
  * ====================================================================== */
+static void hd_capture_now(void)
+{
+    int was = g_hd_track;
+    int no = hd_capture();
+    g_hd_track = was;
+    wchar_t m[100];
+    if (no) _snwprintf(m, 99, L"снимок графики %d сохранён в hdpack\\scenes", no);
+    else wcscpy(m, L"не удалось сохранить снимок графики");
+    set_status(m);
+}
+
 static void on_key(int vk, int alt)
 {
     if (vk == VK_RETURN && alt) { toggle_fullscreen(); return; }
@@ -1113,6 +1215,7 @@ static void on_key(int vk, int alt)
     if (vk == VK_F1 + 5) { if (--C.slot < 1) C.slot = 9; wchar_t m[50]; _snwprintf(m, 49, L"слот %d", C.slot); set_status(m); }
     if (vk == VK_F1 + 6) { if (++C.slot > 9) C.slot = 1; wchar_t m[50]; _snwprintf(m, 49, L"слот %d", C.slot); set_status(m); }
     if (vk == VK_PAUSE) menu_set_open(1);
+    if (vk == VK_F1 + 8) hd_capture_now();
 }
 
 static int menu_hit(int mx, int my)
@@ -1127,6 +1230,7 @@ static int menu_hit(int mx, int my)
 static int16_t snd[8192];
 static void game_frames(int fast)
 {
+    g_hd_track = hd_on() || C.hd_auto;
     emu_set_pad(0, game_pad());
     int frames = fast ? C.turbo_speed : 1;
     if (!fast && C.battle_speed > 1 && emu_in_battle()) frames = C.battle_speed;
@@ -1138,6 +1242,7 @@ static void game_frames(int fast)
         while ((n = emu_audio(snd, 4096)) > 0)
             if (i == 0) audio_push(snd, n);
     }
+    if (C.hd_auto) hd_auto_capture();
     present();
     static int last_mode = -1;
     int mode = emu_game_mode();
@@ -1272,8 +1377,8 @@ static int load_rom_file(const wchar_t *path, int quiet)
 static const char *settings_info(void)
 {
     static char b[200];
-    _snprintf(b, 199, "ws %d fx %d/%d d3d %d gl %d vsync %d full %d scale %d smooth %d rewind %d battle x%d hd-threads %d rom-kind %d",
-              C.ws_mode, C.fx_mode, fx_ok, d3d_ok, gl_ok, C.vsync, fullscreen, C.scale_mode, C.smooth, C.rewind, C.battle_speed, hd_threads, rom_kind_loaded);
+    _snprintf(b, 199, "hd %d/%d/%d ws %d fx %d/%d d3d %d gl %d vsync %d full %d scale %d smooth %d rewind %d battle x%d hd-threads %d rom-kind %d",
+              C.hd_pack, hd_tiles(), C.hd_auto, C.ws_mode, C.fx_mode, fx_ok, d3d_ok, gl_ok, C.vsync, fullscreen, C.scale_mode, C.smooth, C.rewind, C.battle_speed, hd_threads, rom_kind_loaded);
     b[199] = 0;
     return b;
 }
@@ -1285,9 +1390,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.11");
+    diag_init(exe_dir, "0.12");
     diag_info = settings_info;
-    logw("start, version 0.11");
+    logw("start, version 0.12");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
@@ -1337,6 +1442,10 @@ static int run(void)
         logw("shaders %s", fx_ok ? "ok" : glfx_error());
     }
     logw("window ok, opengl %d (%s), hd threads %d", gl_ok, gl_ok ? (const char *)glGetString(GL_VERSION) : "-", hd_threads);
+
+    path_in_exe_dir(hd_dir, L"hdpack\\");
+    { hd_io_t hio = { hd_io_write, hd_io_read, hd_io_list, hd_io_log }; hd_set_io(&hio); }
+    hd_load();
 
     int argc = 0; LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     int loaded = 0;

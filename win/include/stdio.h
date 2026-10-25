@@ -28,6 +28,7 @@ int sscanf(const char *, const char *, ...);
 int _snprintf(char *, size_t, const char *, ...);
 int _vsnprintf(char *, size_t, const char *, va_list);
 int _snwprintf(wchar_t *, size_t, const wchar_t *, ...);
+static inline int vsnprintf(char *b, size_t n, const char *f, va_list a) { int r = _vsnprintf(b, n, f, a); if (n) b[n - 1] = 0; return r < 0 ? (int)n : r; }
 static inline int snprintf(char *b, size_t n, const char *f, ...)
 { va_list a; va_start(a, f); int r = _vsnprintf(b, n, f, a); va_end(a); if (n) b[n - 1] = 0; return r; }
 void perror(const char *);

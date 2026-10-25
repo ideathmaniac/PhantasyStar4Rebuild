@@ -47,6 +47,21 @@ extern uint64_t g_line_end;      /* g_cycles value at which the line ends */
 
 /* framebuffer: one 32-bit pixel (0x00RRGGBB) per dot, H40 = 320 wide */
 extern uint32_t g_fb[MD_VIS_LINES][MD_W_MAX];
+/* HD packs: per screen pixel, the tile pixel it shows (0 = backdrop / none) */
+#define VSRC_VALID 0x80000000u
+#define VSRC_TILE(s) ((s) & 0x7FF)
+#define VSRC_PAL(s) (((s) >> 11) & 3)
+#define VSRC_HFLIP(s) (((s) >> 13) & 1)
+#define VSRC_VFLIP(s) (((s) >> 14) & 1)
+#define VSRC_CX(s) (((s) >> 15) & 7)       /* pixel inside the tile pattern, unflipped */
+#define VSRC_CY(s) (((s) >> 18) & 7)
+#define VSRC_LVL(s) (((s) >> 21) & 3)      /* shadow / highlight */
+extern int g_hd_track;
+extern uint32_t g_src[MD_VIS_LINES][MD_W_MAX];
+extern uint32_t g_ws_src;
+uint32_t vdp_make_src(uint16_t ent, int px, int py);
+uint32_t vdp_color(int idx);
+
 extern int      g_fb_width;      /* 256 or 320 for the last frame */
 
 /* pads: bit set = pressed */
