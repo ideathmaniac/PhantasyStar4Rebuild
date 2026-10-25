@@ -134,6 +134,34 @@ static const char *SH_CRT = FX_COMMON
     "  return float4(sqrt(clamp(col, 0.0, 1.0)) * vig, 1.0);\n"
     "}\n";
 
+/* the empty bars beside the picture: the picture shrunk (block averages,
+ * extra = block size in pixels) and drawn blurred and dimmed */
+static const char *SH_DOWN = FX_COMMON
+    "float4 body() {\n"
+    "  float2 p = uv * tsize;\n"
+    "  float3 acc = float3(0.0, 0.0, 0.0);\n"
+    "  for (int j = 0; j < 4; j++)\n"
+    "    for (int i = 0; i < 4; i++) {\n"
+    "      float2 q = clamp(p + (float2(float(i), float(j)) - 1.5) * extra / 4.0, float2(0.5, 0.5), fsize - 0.5);\n"
+    "      acc += TEX(q / tsize).rgb;\n"
+    "    }\n"
+    "  return float4(acc / 16.0, 1.0);\n"
+    "}\n";
+static const char *SH_BACKDROP = FX_COMMON
+    "float4 body() {\n"
+    "  float2 p = uv * tsize;\n"
+    "  float3 acc = float3(0.0, 0.0, 0.0);\n"
+    "  for (int j = -1; j <= 1; j++)\n"
+    "    for (int i = -1; i <= 1; i++) {\n"
+    "      float2 q = clamp(p + float2(float(i), float(j)) * 0.9, float2(0.5, 0.5), fsize - 0.5);\n"
+    "      acc += TEX(q / tsize).rgb;\n"
+    "    }\n"
+    "  acc = acc / 9.0;\n"
+    "  float l = dot(acc, float3(0.299, 0.587, 0.114));\n"
+    "  acc = lerp(float3(l, l, l), acc, 0.75) * 0.45;\n"
+    "  return float4(acc, 1.0);\n"
+    "}\n";
+
 /* plain copy (overlays: menu, messages) */
 static const char *SH_COPY =
     "float4 body() { return float4(TEX(uv).rgb, 1.0); }\n";

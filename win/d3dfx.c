@@ -111,7 +111,8 @@ static void *tex_edge, *srv_edge, *rtv_edge;      /* FX_SMOOTH pass 1 */
 static void *tex_ovl, *srv_ovl;                   /* overlays (menu), window sized */
 static int ovl_w, ovl_h;
 static void *cbuf, *samp, *rast, *vs;
-static void *ps_dither, *ps_edge, *ps_xbr, *ps_pixels, *ps_crt, *ps_copy;
+static void *ps_dither, *ps_edge, *ps_xbr, *ps_pixels, *ps_crt, *ps_copy, *ps_back, *ps_down;
+static void *tex_bd, *srv_bd, *rtv_bd;            /* the picture shrunk for the side bars */
 
 /* constant buffer, as declared in HLSL_HEAD */
 typedef struct { float rect[4], uvx[4], tsize[2], fsize[2], scale[2], extra, pad; } consts_t;
@@ -230,6 +231,7 @@ static int init2(void *hwnd)
     if (!make_tex(&tex_src, &srv_src, 0, TW, TH, FMT_B8G8R8A8, 1)) return 0;
     if (!make_tex(&tex_dith, &srv_dith, &rtv_dith, TW, TH, FMT_R8G8B8A8, 0)) return 0;
     if (!make_tex(&tex_edge, &srv_edge, &rtv_edge, TW, TH, FMT_R8G8B8A8, 0)) return 0;
+    if (!make_tex(&tex_bd, &srv_bd, &rtv_bd, TW, TH, FMT_R8G8B8A8, 0)) return 0;
 
     BUF_DESC bd; memset(&bd, 0, sizeof bd);
     bd.ByteWidth = sizeof(consts_t); bd.Usage = USAGE_DYNAMIC; bd.BindFlags = BIND_CB; bd.CPUAccessFlags = CPU_WRITE;
@@ -245,7 +247,8 @@ static int init2(void *hwnd)
     if (!(vs = compile(HLSL_VS, "vs", 1))) return 0;
     if (!(ps_dither = compile(SH_DITHER, "dither", 0)) || !(ps_edge = compile(SH_EDGE, "edge", 0)) ||
         !(ps_xbr = compile(SH_XBR, "xbr", 0)) || !(ps_pixels = compile(SH_PIXELS, "pixels", 0)) ||
-        !(ps_crt = compile(SH_CRT, "crt", 0)) || !(ps_copy = compile(SH_COPY, "copy", 0)))
+        !(ps_crt = compile(SH_CRT, "crt", 0)) || !(ps_copy = compile(SH_COPY, "copy", 0)) ||
+        !(ps_back = compile(SH_BACKDROP, "backdrop", 0)) || !(ps_down = compile(SH_DOWN, "down", 0)))
         return 0;
     return 1;
 }
@@ -298,7 +301,7 @@ static void pass(void *rtv, int vw, int vh, void *ps, void *in0, void *in1)
 }
 
 void d3d_frame(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w, int h, int cw, int ch,
-               int mode, int bilinear, int dither)
+               int mode, int bilinear, int dither, int backdrop)
 {
     if (!ctx) return;
     if (cw < 1 || ch < 1) return;
@@ -330,11 +333,26 @@ void d3d_frame(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w,
         set_consts(-1, 1, 1, -1, u, v, 0, 0, W, H, 1, 1, 0);
         pass(rtv_edge, W, H, ps_edge, src, 0);
     }
+    int bw = 0, bh = 0;
+    if (backdrop && (w < cw - 1 || h < ch - 1)) {     /* the picture shrunk 8x for the bars */
+        int B = 8 * (H / 224 > 0 ? H / 224 : 1);
+        bw = (W + B - 1) / B; bh = (H + B - 1) / B;
+        set_consts(-1, 1, 1, -1, u, v, 0, 0, W, H, 1, 1, (float)B);
+        pass(rtv_bd, bw, bh, ps_down, up_srv, 0);
+    }
     static const float black[4] = { 0, 0, 0, 1 };
     C_OMSetRT(ctx, 1, &bb_rtv, 0);
     C_ClearRTV(ctx, bb_rtv, black);
     float x0 = 2.0f * x / cw - 1, x1 = 2.0f * (x + w) / cw - 1, y0 = 1 - 2.0f * y / ch, y1 = 1 - 2.0f * (y + h) / ch;
     float sx = (float)w / W, sy = (float)h / H;
+    if (bw) {
+        float fx, fy; glfx_cover(w, h, cw, ch, &fx, &fy);
+        int stw = tw, sth = th; tw = TW; th = TH;      /* the small picture lives in a 512 x 256 texture */
+        float su = (float)bw / TW, sv = (float)bh / TH;
+        set_consts(-1, 1, 1, -1, fx * su, fy * sv, (1 - fx) / 2 * su, (1 - fy) / 2 * sv, bw, bh, 1, 1, 0);
+        tw = stw; th = sth;
+        pass(bb_rtv, cw, ch, ps_back, srv_bd, 0);
+    }
     if (mode == FX_SMOOTH) {
         set_consts(x0, y0, x1, y1, u, v, 0, 0, W, H, sx, sy, 0);
         pass(bb_rtv, cw, ch, ps_xbr, src, srv_edge);

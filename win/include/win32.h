@@ -146,6 +146,7 @@ typedef struct { WORD wYear, wMonth, wDayOfWeek, wDay, wHour, wMinute, wSecond, 
 BOOL GetFileAttributesExW(LPCWSTR, int, void *);
 BOOL FileTimeToLocalFileTime(const FILETIME_ *, FILETIME_ *);
 BOOL FileTimeToSystemTime(const FILETIME_ *, SYSTEMTIME *);
+void GetLocalTime(SYSTEMTIME *);
 /* shell32 */
 HINSTANCE ShellExecuteW(HWND, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, int);
 /* user32 */

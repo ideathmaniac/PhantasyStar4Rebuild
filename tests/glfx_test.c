@@ -41,7 +41,7 @@ int main(int argc, char **argv)
     double par = (4.0 / 3.0 * 224.0) / 320.0, sy = (double)ch / 224, sx = sy * par;
     if (sx * LW > cw) { sx = (double)cw / LW; sy = sx / par; }
     int w = (int)(LW * sx + 0.5), h = (int)(224 * sy + 0.5), x = (cw - w) / 2, y = (ch - h) / 2;
-    glfx_draw(fb, W, H, W, x, y, w, h, cw, ch, mode, bil, dith);
+    glfx_draw(fb, W, H, W, x, y, w, h, cw, ch, mode, bil, dith, getenv("BACKDROP") != 0);
     unsigned char *o = malloc((size_t)cw * ch * 4);
     glReadPixels(0, 0, cw, ch, 0x1908, 0x1401, o);
     f = fopen(argv[2], "wb"); fprintf(f, "P6\n%d %d\n255\n", cw, ch);

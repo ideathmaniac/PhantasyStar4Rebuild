@@ -49,3 +49,4 @@ FindClose
 GetFileAttributesExW
 FileTimeToLocalFileTime
 FileTimeToSystemTime
+GetLocalTime

@@ -121,8 +121,8 @@ static const char *FS_TAIL = "void main() { gl_FragColor = body(); }\n";
 
 /* ---------------------------------------------------------------- setup */
 typedef struct { GLuint prog; GLint src, tsize, fsize, scale, extra, edge; } prog_t;
-static prog_t P_DITHER, P_EDGE, P_XBR, P_PIXELS, P_CRT;
-static GLuint tex_src, tex_dith, tex_edge, fbo_dith, fbo_edge;
+static prog_t P_DITHER, P_EDGE, P_XBR, P_PIXELS, P_CRT, P_BACK, P_DOWN;
+static GLuint tex_src, tex_dith, tex_edge, fbo_dith, fbo_edge, tex_bd, fbo_bd;
 static int ready;
 
 static GLuint compile(GLenum type, const char *s, const char *name)
@@ -204,12 +204,13 @@ int glfx_init(glfx_getproc_t gp)
     L(pFramebufferTexture2D, "glFramebufferTexture2D"); L(pCheckFramebufferStatus, "glCheckFramebufferStatus");
 #undef L
     if (!link(&P_DITHER, SH_DITHER, "dither") || !link(&P_EDGE, SH_EDGE, "edge") || !link(&P_XBR, SH_XBR, "xbr") ||
-        !link(&P_PIXELS, SH_PIXELS, "pixels") || !link(&P_CRT, SH_CRT, "crt"))
+        !link(&P_PIXELS, SH_PIXELS, "pixels") || !link(&P_CRT, SH_CRT, "crt") || !link(&P_BACK, SH_BACKDROP, "backdrop") || !link(&P_DOWN, SH_DOWN, "down"))
         return 0;
     new_tex(&tex_src, GL_LINEAR);
     new_tex(&tex_dith, GL_LINEAR);
     new_tex(&tex_edge, GL_NEAREST);
-    if (!new_fbo(&fbo_dith, tex_dith) || !new_fbo(&fbo_edge, tex_edge)) return 0;
+    new_tex(&tex_bd, GL_LINEAR);
+    if (!new_fbo(&fbo_dith, tex_dith) || !new_fbo(&fbo_edge, tex_edge) || !new_fbo(&fbo_bd, tex_bd)) return 0;
     while (glGetError()) {}
     ready = 1;
     return 1;
@@ -237,6 +238,24 @@ static void quad(float x, float y, float w, float h, float u1, float v1)
     glEnd();
 }
 
+static void quad_uv(float x, float y, float w, float h, float u0, float v0, float u1, float v1)
+{
+    glBegin(GL_QUADS);
+    glTexCoord2f(u0, v0); glVertex2f(x, y);
+    glTexCoord2f(u1, v0); glVertex2f(x + w, y);
+    glTexCoord2f(u1, v1); glVertex2f(x + w, y + h);
+    glTexCoord2f(u0, v1); glVertex2f(x, y + h);
+    glEnd();
+}
+
+/* the part of the picture that fills the window when scaled to cover it */
+void glfx_cover(int w, int h, int cw, int ch, float *fx, float *fy)
+{
+    double a = (double)w / h, aw = (double)cw / ch;
+    *fx = 1; *fy = 1;
+    if (aw > a) *fy = (float)(a / aw); else *fx = (float)(aw / a);
+}
+
 /* draw the whole picture into an offscreen texture of the same size */
 static void to_fbo(GLuint fbo, int W, int H)
 {
@@ -248,7 +267,7 @@ static void to_fbo(GLuint fbo, int W, int H)
 }
 
 void glfx_draw(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w, int h, int cw, int ch,
-               int mode, int bilinear, int dither)
+               int mode, int bilinear, int dither, int backdrop)
 {
     if (!ready) return;
     GLuint up = tex_src;
@@ -279,12 +298,32 @@ void glfx_draw(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w,
         use(&P_EDGE, src, W, H, 1, 1);
         to_fbo(fbo_edge, W, H);
     }
+    int bw = 0, bh = 0;
+    if (backdrop && (w < cw - 1 || h < ch - 1)) {     /* the picture shrunk 8x for the bars */
+        int B = 8 * (H / 224 > 0 ? H / 224 : 1);
+        bw = (W + B - 1) / B; bh = (H + B - 1) / B;
+        use(&P_DOWN, up, W, H, 1, 1);
+        pUniform1f(P_DOWN.extra, (float)B);
+        pBindFramebuffer(GL_FRAMEBUFFER, fbo_bd);
+        glViewport(0, 0, bw, bh);
+        glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, bw, 0, bh, -1, 1);
+        glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+        quad(0, 0, (float)bw, (float)bh, (float)W / tw, (float)H / th);
+    }
 
     pBindFramebuffer(GL_FRAMEBUFFER, 0);
     glViewport(0, 0, cw, ch);
     glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, cw, ch, 0, -1, 1);
     glMatrixMode(GL_MODELVIEW); glLoadIdentity();
     float sx = (float)w / W, sy = (float)h / H;
+    if (bw) {
+        float fx, fy; glfx_cover(w, h, cw, ch, &fx, &fy);
+        int stw = tw, sth = th; tw = TW; th = TH;      /* the small picture lives in a 512 x 256 texture */
+        float u = (float)bw / tw, v = (float)bh / th;
+        use(&P_BACK, tex_bd, bw, bh, 1, 1);
+        tw = stw; th = sth;
+        quad_uv(0, 0, (float)cw, (float)ch, (1 - fx) / 2 * u, (1 - fy) / 2 * v, (1 + fx) / 2 * u, (1 + fy) / 2 * v);
+    }
     if (mode == FX_SMOOTH) {
         use(&P_XBR, src, W, H, sx, sy);
         pActiveTexture(GL_TEXTURE1);

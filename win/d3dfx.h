@@ -8,7 +8,7 @@ const char *d3d_error(void);
 const char *d3d_info(void);                /* feature level and swap model, for the log */
 /* the frame into the destination rectangle of a cw x ch window (clears the rest) */
 void d3d_frame(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w, int h, int cw, int ch,
-               int mode, int bilinear, int dither);
+               int mode, int bilinear, int dither, int backdrop);
 /* copies a box of a 32-bit picture the size of the window (menu, messages) on top */
 void d3d_overlay(const uint32_t *bits, int bw, int bh, int rx, int ry, int rw, int rh);
 int  d3d_present(int vsync);               /* 0 when the device was lost */

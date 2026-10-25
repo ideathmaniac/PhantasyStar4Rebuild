@@ -21,6 +21,9 @@ const char *glfx_error(void);
  * dithering stripes. Leaves GL state as the fixed-function path expects:
  * program 0, texture unit 0, default framebuffer, orthographic matrices. */
 void glfx_draw(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w, int h, int cw, int ch,
-               int mode, int bilinear, int dither);
+               int mode, int bilinear, int dither, int backdrop);
+/* backdrop: fill the bars beside the picture with a blurred copy of it.
+ * glfx_cover: the share of the picture (fx, fy) that covers a cw x ch window */
+void glfx_cover(int w, int h, int cw, int ch, float *fx, float *fy);
 
 #endif
