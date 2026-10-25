@@ -34,3 +34,5 @@ GetKeyState
 MapVirtualKeyW
 GetKeyNameTextW
 SetCursor
+SetTimer
+KillTimer

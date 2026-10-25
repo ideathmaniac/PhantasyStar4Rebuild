@@ -131,6 +131,11 @@ uint64_t GetTickCount64(void);
 #define MB_TOPMOST 0x40000
 #define MB_SETFOREGROUND 0x10000
 /* user32 */
+UINT_PTR SetTimer(HWND, UINT_PTR, UINT, void *);
+BOOL KillTimer(HWND, UINT_PTR);
+#define WM_TIMER 0x0113
+#define WM_ENTERSIZEMOVE 0x0231
+#define WM_EXITSIZEMOVE 0x0232
 UINT RegisterClassExW(const WNDCLASSEXW *);
 HWND CreateWindowExW(DWORD, LPCWSTR, LPCWSTR, DWORD, int, int, int, int, HWND, HMENU, HINSTANCE, void *);
 LRESULT DefWindowProcW(HWND, UINT, WPARAM, LPARAM);

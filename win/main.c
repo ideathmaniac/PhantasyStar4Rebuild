@@ -1016,6 +1016,43 @@ static int menu_hit(int mx, int my)
     return -1;
 }
 
+/* one displayed frame: 1 or more emulated frames, their sound, the picture */
+static int16_t snd[8192];
+static void game_frames(int fast)
+{
+    emu_set_pad(0, game_pad());
+    int frames = fast ? C.turbo_speed : 1;
+    if (!fast && C.battle_speed > 1 && emu_in_battle()) frames = C.battle_speed;
+    /* the sound queue ran low (the window was dragged, the PC was busy):
+     * catch up with an extra frame whose sound is played too, otherwise the
+     * queue stays near empty and every hiccup becomes a stutter */
+    int with_sound = 1;
+    if (frames == 1 && audio_ok && audio_queued() < 1600) { frames = 2; with_sound = 2; }
+    for (int i = 0; i < frames; i++) {
+        emu_run_frame();
+        frame_no++;
+        if (C.rewind && (frame_no & 1)) rw_push();
+        int n;
+        while ((n = emu_audio(snd, 4096)) > 0)
+            if (i < with_sound) audio_submit(snd, n);
+    }
+    present();
+    static int last_mode = -1;
+    int mode = emu_game_mode();
+    if (mode != last_mode) { logw("game mode %02X, 68k pc %06X", mode, emu_cpu_pc()); last_mode = mode; }
+    if (frame_no % 3600 == 0) logw("alive, game mode %02X, 68k pc %06X", mode, emu_cpu_pc());
+}
+
+/* Windows runs its own loop while the window is dragged or resized; a timer
+ * keeps the game going meanwhile */
+static int in_sizemove;
+static void sizemove_tick(void)
+{
+    diag_heartbeat(frame_no);
+    if (menu_open) { present(); return; }
+    for (int k = 0; k < 3 && (!audio_ok || audio_queued() <= 2400); k++) game_frames(0);
+}
+
 static LRESULT wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     int mx = (int)(short)(l & 0xFFFF), my = (int)(short)((l >> 16) & 0xFFFF);
@@ -1047,6 +1084,9 @@ static LRESULT wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             m_sel = (m_sel + nitems + (d > 0 ? -1 : 1)) % nitems;
         }
         return 0;
+    case WM_ENTERSIZEMOVE: in_sizemove = 1; SetTimer(h, 1, 8, 0); return 0;
+    case WM_EXITSIZEMOVE: in_sizemove = 0; KillTimer(h, 1); return 0;
+    case WM_TIMER: if (in_sizemove && h == hwnd) sizemove_tick(); return 0;
     case WM_CLOSE: quit = 1; return 0;
     case WM_DESTROY: PostQuitMessage(0); return 0;
     case WM_ERASEBKGND: return 1;
@@ -1125,9 +1165,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.7");
+    diag_init(exe_dir, "0.8");
     diag_info = settings_info;
-    logw("start, version 0.7");
+    logw("start, version 0.8");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
@@ -1197,8 +1237,6 @@ static int run(void)
     double next_frame = (double)now_ms();
     int sram_pending = 0;
     uint64_t last_autosave = now_ms();
-    static int16_t snd[8192];
-
     while (!quit) {
         diag_heartbeat(frame_no);
         MSG msg;
@@ -1255,24 +1293,7 @@ static int run(void)
             continue;
         }
 
-        emu_set_pad(0, game_pad());
-        int frames = fast ? C.turbo_speed : 1;
-        if (!fast && C.battle_speed > 1 && emu_in_battle()) frames = C.battle_speed;
-        for (int i = 0; i < frames; i++) {
-            emu_run_frame();
-            frame_no++;
-            if (C.rewind && (frame_no & 1)) rw_push();
-            int n;
-            while ((n = emu_audio(snd, 4096)) > 0)
-                if (i == 0) audio_submit(snd, n);
-        }
-        present();
-        {
-            static int last_mode = -1;
-            int mode = emu_game_mode();
-            if (mode != last_mode) { logw("game mode %02X, 68k pc %06X", mode, emu_cpu_pc()); last_mode = mode; }
-            if (frame_no % 3600 == 0) logw("alive, game mode %02X, 68k pc %06X", mode, emu_cpu_pc());
-        }
+        game_frames(fast);
 
         if (emu_sram_dirty()) sram_pending = 1;
         if (sram_pending && frame_no % 120 == 0) { sram_write(); sram_pending = 0; }
