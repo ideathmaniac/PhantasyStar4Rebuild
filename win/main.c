@@ -759,7 +759,7 @@ static void build_menu(void)
         add(L"Управление: геймпад", L"▸");
         _snwprintf(v, 79, L"%d%%", C.volume); add(L"Громкость", v);
         add(L"Справка", L"▸");
-        add(L"Сброс консоли", 0);
+        add(L"Новая игра (на титульный экран)", 0);
         add(m_confirm_quit ? L"Выйти? Нажмите ещё раз" : L"Выход", 0);
         break;
     case M_VIDEO: {
@@ -887,7 +887,7 @@ static void menu_act(int dir)
         case 8: if (!dir) { m_page = M_PAD; m_sel = 0; } break;
         case 9: C.volume += (dir ? dir : 1) * 10; if (C.volume > 100) C.volume = dir ? 100 : 0; if (C.volume < 0) C.volume = 0; break;
         case 10: if (!dir) { m_page = M_HELP; m_sel = 0; } break;
-        case 11: if (!dir) { emu_reset(); rw_clear(); set_status(L"сброс"); menu_set_open(0); } break;
+        case 11: if (!dir) { emu_reset(); rw_clear(); set_status(L"титульный экран: Start — «Новая игра»"); menu_set_open(0); } break;
         case 12: if (!dir) { if (m_confirm_quit) quit = 1; else m_confirm_quit = 1; } break;
         }
     } else if (m_page == M_VIDEO) {
@@ -1125,9 +1125,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.6");
+    diag_init(exe_dir, "0.7");
     diag_info = settings_info;
-    logw("start, version 0.6");
+    logw("start, version 0.7");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
