@@ -33,9 +33,11 @@ typedef struct {
     uint16_t keys[NACT][NKEY];
     uint16_t pad[NACT][NPAD];
     wchar_t rom[600];
+    int32_t pad_mode, vsync, use_gl;       /* added in 0.3 */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
+#define CFG_V2_SIZE (offsetof(cfg_t, pad_mode))
 static cfg_t C;
 
 /* pad input codes */
@@ -56,6 +58,7 @@ static void cfg_defaults(void)
     C.magic = CFG_MAGIC; C.version = CFG_VERSION;
     C.ws_mode = 2; C.hd = 0; C.scale_mode = 0; C.smooth = 0; C.battle_speed = 1; C.turbo_speed = 3;
     C.rewind = 1; C.autosave_min = 5; C.volume = 100; C.slot = 1;
+    C.pad_mode = 0; C.vsync = 1; C.use_gl = 1;
     static const uint16_t k[NACT][NKEY] = {
         { VK_UP, 'W' }, { VK_DOWN, 'S' }, { VK_LEFT, 'A' }, { VK_RIGHT, 'D' },
         { 'Z', 'J' }, { 'X', 'K' }, { 'C', VK_SPACE }, { VK_RETURN, 0 },
@@ -133,7 +136,8 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if (n == sizeof C && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) memcpy(&C, b, sizeof C);
+    if ((n == sizeof C || n == CFG_V2_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION)
+        memcpy(&C, b, n);                      /* a 0.2 file keeps the new fields at their defaults */
     else if (n >= 20 + 1200 && *(uint32_t *)b == 0x31475043u)   /* version 1 file: keep the ROM path */
         memcpy(C.rom, b + 20, 1200);
     free(b);
@@ -252,6 +256,11 @@ static uint8_t code_down[NCODES], code_prev[NCODES];
 static uint8_t act_down[NACT], act_prev[NACT];     /* keyboard + pad (game buttons, turbo, rewind) */
 static uint8_t pact_down[NACT], pact_prev[NACT];   /* pad only (menu navigation, pad hotkeys) */
 static wchar_t pad_name[64] = L"не подключён";
+/* Inputs already held when a device connects are ignored until released
+ * (some devices report a pressed button or a zero axis all the time). */
+static uint8_t code_stuck[NCODES];
+static int stuck_arm;                       /* next poll marks held codes as stuck */
+static DWORD joy_rest_x, joy_rest_y;
 
 static void input_init(void)
 {
@@ -268,12 +277,12 @@ static void poll_pads(void)
     memset(code_down, 0, sizeof code_down);
     uint64_t t = now_ms();
     /* XInput: the first connected controller */
-    if (xinput_get) {
+    if (xinput_get && C.pad_mode != 2) {
         XINPUT_STATE st;
         if (xi_user < 0 && t >= xi_retry) {
             for (int u = 0; u < 4; u++) { memset(&st, 0, sizeof st); if (xinput_get((DWORD)u, &st) == 0) { xi_user = u; break; } }
             if (xi_user < 0) xi_retry = t + 2000;
-            else { _snwprintf(pad_name, 63, L"Xbox-совместимый (XInput %d)", xi_user + 1); set_status(L"геймпад подключён"); }
+            else { _snwprintf(pad_name, 63, L"Xbox-совместимый (XInput %d)", xi_user + 1); set_status(L"геймпад подключён"); stuck_arm = 1; }
         }
         if (xi_user >= 0) {
             memset(&st, 0, sizeof st);
@@ -291,13 +300,16 @@ static void poll_pads(void)
     }
     /* WinMM (DirectInput-class pads: DualShock, generic USB). Skipped while an
      * XInput pad is active: Xbox pads show up here too, with other button numbers. */
-    if (xi_user < 0) {
+    if (xi_user < 0 && C.pad_mode == 0) {
         JOYINFOEX ji;
         if (joy_id < 0 && t >= joy_retry) {
             UINT n = joyGetNumDevs(); if (n > 16) n = 16;
             for (UINT i = 0; i < n; i++) { memset(&ji, 0, sizeof ji); ji.dwSize = sizeof ji; ji.dwFlags = JOY_RETURNALL; if (joyGetPosEx(i, &ji) == 0) { joy_id = (int)i; break; } }
             if (joy_id < 0) joy_retry = t + 2000;
-            else { _snwprintf(pad_name, 63, L"геймпад DirectInput %d", joy_id + 1); set_status(L"геймпад подключён"); }
+            else {
+                _snwprintf(pad_name, 63, L"геймпад DirectInput %d", joy_id + 1); set_status(L"геймпад подключён");
+                joy_rest_x = ji.dwXpos; joy_rest_y = ji.dwYpos; stuck_arm = 1;
+            }
         }
         if (joy_id >= 0) {
             memset(&ji, 0, sizeof ji); ji.dwSize = sizeof ji; ji.dwFlags = JOY_RETURNALL;
@@ -311,13 +323,21 @@ static void poll_pads(void)
                     if (p >= 22500 && p <= 31500) code_down[JOY_POV(2)] = 1;
                     if (p >= 4500 && p <= 13500) code_down[JOY_POV(3)] = 1;
                 }
-                if (ji.dwYpos < 16000) code_down[JOY_AXIS(0)] = 1;
-                if (ji.dwYpos > 49500) code_down[JOY_AXIS(1)] = 1;
-                if (ji.dwXpos < 16000) code_down[JOY_AXIS(2)] = 1;
-                if (ji.dwXpos > 49500) code_down[JOY_AXIS(3)] = 1;
+                /* axes relative to where they rested at connection */
+                long dy = (long)ji.dwYpos - (long)joy_rest_y, dx = (long)ji.dwXpos - (long)joy_rest_x;
+                if (dy < -16000) code_down[JOY_AXIS(0)] = 1;
+                if (dy > 16000) code_down[JOY_AXIS(1)] = 1;
+                if (dx < -16000) code_down[JOY_AXIS(2)] = 1;
+                if (dx > 16000) code_down[JOY_AXIS(3)] = 1;
             }
         }
     }
+    if (stuck_arm) { for (int c = 0; c < NCODES; c++) code_stuck[c] = code_down[c]; stuck_arm = 0; }
+    for (int c = 0; c < NCODES; c++) {
+        if (!code_down[c]) code_stuck[c] = 0;
+        else if (code_stuck[c]) code_down[c] = 0;
+    }
+    if (C.pad_mode == 2) memset(code_down, 0, sizeof code_down);
     memcpy(act_prev, act_down, sizeof act_down);
     memcpy(pact_prev, pact_down, sizeof pact_down);
     for (int a = 0; a < NACT; a++) {
@@ -386,6 +406,7 @@ static void pad_code_name(int c, wchar_t *out, int n)
  * Video: back buffer, HD threads, presentation
  * ====================================================================== */
 static HDC back_dc;
+static void *back_bits;
 static HGDIOBJ back_bmp, back_old;
 static int back_w, back_h;
 static uint32_t *hd_buf;
@@ -439,6 +460,7 @@ static void ensure_back(int w, int h)
     void *bits = 0;
     back_bmp = CreateDIBSection(wdc, &bi, DIB_RGB_COLORS, &bits, 0, 0);
     back_old = SelectObject(back_dc, back_bmp);
+    back_bits = bits;
     ReleaseDC(hwnd, wdc);
     back_w = w; back_h = h;
     if (font_big) DeleteObject(font_big);
@@ -495,38 +517,155 @@ static void fill(int x, int y, int w, int h, DWORD color)
 }
 
 static void draw_menu(void);
+static void draw_status(void);
+static int menu_rect[4], status_rect[4];   /* x, y, w, h of overlay boxes drawn this frame */
+
+/* ---------- OpenGL path (GPU scaling, vsync) ---------- */
+static HDC gl_dc;
+static HGLRC gl_rc;
+static int gl_ok, gl_npot;
+static GLuint tex_frame, tex_hd, tex_ovl;
+static int ovl_tw, ovl_th;
+typedef BOOL (*swap_interval_t)(int);
+static swap_interval_t wgl_swap_interval;
+static int vsync_applied = -1;
+
+static int pot(int v) { int p = 1; while (p < v) p <<= 1; return p; }
+
+static void gl_new_tex(GLuint *t, int w, int h)
+{
+    if (!*t) glGenTextures(1, t);
+    glBindTexture(GL_TEXTURE_2D, *t);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, w, h, 0, GL_BGRA_EXT, GL_UNSIGNED_BYTE, 0);
+}
+
+static int gl_init(void)
+{
+    gl_dc = GetDC(hwnd);
+    PIXELFORMATDESCRIPTOR pfd; memset(&pfd, 0, sizeof pfd);
+    pfd.nSize = sizeof pfd; pfd.nVersion = 1;
+    pfd.dwFlags = PFD_DRAW_TO_WINDOW | PFD_SUPPORT_OPENGL | PFD_DOUBLEBUFFER;
+    pfd.iPixelType = 0; pfd.cColorBits = 32;
+    int pf = ChoosePixelFormat(gl_dc, &pfd);
+    if (!pf || !SetPixelFormat(gl_dc, pf, &pfd)) return 0;
+    gl_rc = wglCreateContext(gl_dc);
+    if (!gl_rc || !wglMakeCurrent(gl_dc, gl_rc)) return 0;
+    const char *ver = (const char *)glGetString(GL_VERSION);
+    if (!ver) return 0;
+    gl_npot = ver[0] >= '2' && ver[0] <= '9';
+    wgl_swap_interval = (swap_interval_t)wglGetProcAddress("wglSwapIntervalEXT");
+    gl_new_tex(&tex_frame, 512, 256);
+    gl_new_tex(&tex_hd, 2048, 1024);
+    glDisable(GL_BLEND);
+    glEnable(GL_TEXTURE_2D);
+    return glGetError() == 0;
+}
+
+static void gl_quad(GLuint t, int tw, int th, int sx, int sy, int sw, int sh, int x, int y, int w, int h, int smooth)
+{
+    glBindTexture(GL_TEXTURE_2D, t);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, smooth ? GL_LINEAR : GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, smooth ? GL_LINEAR : GL_NEAREST);
+    float u0 = (float)sx / tw, v0 = (float)sy / th, u1 = (float)(sx + sw) / tw, v1 = (float)(sy + sh) / th;
+    glColor4f(1, 1, 1, 1);
+    glBegin(GL_QUADS);
+    glTexCoord2f(u0, v0); glVertex2f((float)x, (float)y);
+    glTexCoord2f(u1, v0); glVertex2f((float)(x + w), (float)y);
+    glTexCoord2f(u1, v1); glVertex2f((float)(x + w), (float)(y + h));
+    glTexCoord2f(u0, v1); glVertex2f((float)x, (float)(y + h));
+    glEnd();
+}
+
+static void run_hd(const uint32_t *fb, int W, int H)
+{
+    hd_prepare(fb, W, H, MD_W_MAX);
+    hd_job.src = fb; hd_job.w = W; hd_job.h = H;
+    for (int i = 0; i < hd_threads; i++) SetEvent(hd_go[i]);
+    WaitForMultipleObjects((DWORD)hd_threads, hd_done, 1, INFINITE);
+}
 
 static void present(void)
 {
     RECT cr; GetClientRect(hwnd, &cr);
     int cw = cr.right - cr.left, ch = cr.bottom - cr.top;
+    if (cw < 1 || ch < 1) return;
     ensure_back(cw, ch);
     int W, H; const uint32_t *fb = emu_framebuffer(&W, &H);
     int x, y, w, h;
     dest_rect(cw, ch, W, &x, &y, &w, &h);
-    RECT all = { 0, 0, cw, ch };
-    FillRect(back_dc, &all, (HBRUSH)GetStockObject(BLACK_BRUSH));
-    if (C.hd) {
-        hd_prepare(fb, W, H, MD_W_MAX);
-        hd_job.src = fb; hd_job.w = W; hd_job.h = H;
-        for (int i = 0; i < hd_threads; i++) SetEvent(hd_go[i]);
-        WaitForMultipleObjects((DWORD)hd_threads, hd_done, 1, INFINITE);
-        SetStretchBltMode(back_dc, C.smooth ? HALFTONE : COLORONCOLOR);
-        if (C.smooth) SetBrushOrgEx(back_dc, 0, 0, 0);
-        StretchDIBits(back_dc, x, y, w, h, 0, 0, W * 4, H * 4, hd_buf, &bmi_hd, DIB_RGB_COLORS, SRCCOPY);
-    } else {
-        SetStretchBltMode(back_dc, C.smooth ? HALFTONE : COLORONCOLOR);
-        if (C.smooth) SetBrushOrgEx(back_dc, 0, 0, 0);
-        StretchDIBits(back_dc, x, y, w, h, 0, 0, W, H, fb, &bmi_fb, DIB_RGB_COLORS, SRCCOPY);
+    if (C.hd) run_hd(fb, W, H);
+
+    /* overlays are drawn with GDI into the back buffer, then copied */
+    menu_rect[2] = status_rect[2] = 0;
+    if (menu_open || status_msg[0]) {
+        if (menu_open) draw_menu();
+        draw_status();
     }
-    if (menu_open) draw_menu();
-    if (status_msg[0]) {
-        if (now_ms() > status_until) status_msg[0] = 0;
-        else draw_text(font_h / 2, ch - font_h * 2, status_msg, RGBC(255, 230, 120), font_small);
+
+    if (gl_ok) {
+        if (vsync_applied != C.vsync && wgl_swap_interval) { wgl_swap_interval(C.vsync ? 1 : 0); vsync_applied = C.vsync; }
+        glViewport(0, 0, cw, ch);
+        glClearColor(0, 0, 0, 1);
+        glClear(GL_COLOR_BUFFER_BIT);
+        glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, cw, ch, 0, -1, 1);
+        glMatrixMode(GL_MODELVIEW); glLoadIdentity();
+        glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
+        if (C.hd) {
+            glBindTexture(GL_TEXTURE_2D, tex_hd);
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, MD_W_MAX * 4);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W * 4, H * 4, GL_BGRA_EXT, GL_UNSIGNED_BYTE, hd_buf);
+            gl_quad(tex_hd, 2048, 1024, 0, 0, W * 4, H * 4, x, y, w, h, C.smooth);
+        } else {
+            glBindTexture(GL_TEXTURE_2D, tex_frame);
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, MD_W_MAX);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W, H, GL_BGRA_EXT, GL_UNSIGNED_BYTE, fb);
+            gl_quad(tex_frame, 512, 256, 0, 0, W, H, x, y, w, h, C.smooth);
+        }
+        int *rects[2] = { menu_rect, status_rect };
+        for (int k = 0; k < 2; k++) {
+            int *r = rects[k];
+            if (r[2] <= 0 || r[3] <= 0) continue;
+            GdiFlush();
+            int tw = gl_npot ? cw : pot(cw), th = gl_npot ? ch : pot(ch);
+            if (!tex_ovl || tw != ovl_tw || th != ovl_th) { gl_new_tex(&tex_ovl, tw, th); ovl_tw = tw; ovl_th = th; }
+            glBindTexture(GL_TEXTURE_2D, tex_ovl);
+            glPixelStorei(GL_UNPACK_ROW_LENGTH, back_w);
+            glTexSubImage2D(GL_TEXTURE_2D, 0, r[0], r[1], r[2], r[3], GL_BGRA_EXT, GL_UNSIGNED_BYTE,
+                            (const uint32_t *)back_bits + (size_t)r[1] * back_w + r[0]);
+            gl_quad(tex_ovl, ovl_tw, ovl_th, r[0], r[1], r[2], r[3], r[0], r[1], r[2], r[3], 0);
+        }
+        glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
+        SwapBuffers(gl_dc);
+        return;
     }
+
+    /* GDI fallback: picture straight to the window, overlays copied on top */
     HDC dc = GetDC(hwnd);
-    BitBlt(dc, 0, 0, cw, ch, back_dc, 0, 0, SRCCOPY);
+    HBRUSH black = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    RECT bars[4] = { { 0, 0, cw, y }, { 0, y + h, cw, ch }, { 0, y, x, y + h }, { x + w, y, cw, y + h } };
+    for (int i = 0; i < 4; i++) if (bars[i].right > bars[i].left && bars[i].bottom > bars[i].top) FillRect(dc, &bars[i], black);
+    SetStretchBltMode(dc, C.smooth ? HALFTONE : COLORONCOLOR);
+    if (C.smooth) SetBrushOrgEx(dc, 0, 0, 0);
+    if (C.hd) StretchDIBits(dc, x, y, w, h, 0, 0, W * 4, H * 4, hd_buf, &bmi_hd, DIB_RGB_COLORS, SRCCOPY);
+    else StretchDIBits(dc, x, y, w, h, 0, 0, W, H, fb, &bmi_fb, DIB_RGB_COLORS, SRCCOPY);
+    int *rects[2] = { menu_rect, status_rect };
+    for (int k = 0; k < 2; k++) if (rects[k][2] > 0) BitBlt(dc, rects[k][0], rects[k][1], rects[k][2], rects[k][3], back_dc, rects[k][0], rects[k][1], SRCCOPY);
     ReleaseDC(hwnd, dc);
+}
+
+static void draw_status(void)
+{
+    if (!status_msg[0]) return;
+    if (now_ms() > status_until) { status_msg[0] = 0; return; }
+    int tw = text_w(status_msg, font_small);
+    int bx = font_h / 2, bh = font_h * 3 / 2, by = back_h - bh - font_h / 2, bw = tw + font_h;
+    fill(bx, by, bw, bh, RGBC(16, 28, 74));
+    draw_text(bx + font_h / 2, by + (bh - font_h) / 2, status_msg, RGBC(255, 230, 120), font_small);
+    status_rect[0] = bx; status_rect[1] = by; status_rect[2] = bw; status_rect[3] = bh;
 }
 
 static void toggle_fullscreen(void)
@@ -538,13 +677,11 @@ static void toggle_fullscreen(void)
         SetWindowLongPtrW(hwnd, GWL_STYLE, WS_POPUP | WS_VISIBLE);
         SetWindowPos(hwnd, HWND_TOP, mi.rcMonitor.left, mi.rcMonitor.top, mi.rcMonitor.right - mi.rcMonitor.left,
                      mi.rcMonitor.bottom - mi.rcMonitor.top, SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
-        ShowCursor(0);
         fullscreen = 1;
     } else {
         SetWindowLongPtrW(hwnd, GWL_STYLE, WS_OVERLAPPEDWINDOW | WS_VISIBLE);
         SetWindowPos(hwnd, HWND_TOP, saved_rect.left, saved_rect.top, saved_rect.right - saved_rect.left,
                      saved_rect.bottom - saved_rect.top, SWP_FRAMECHANGED | SWP_NOOWNERZORDER);
-        ShowCursor(1);
         fullscreen = 0;
     }
 }
@@ -606,6 +743,8 @@ static void build_menu(void)
         add(L"Масштаб", scn[C.scale_mode]);
         add(L"Фильтр при масштабировании", onoff(C.smooth));
         add(L"Полный экран", onoff(fullscreen));
+        add(L"Вертикальная синхронизация", onoff(C.vsync));
+        add(L"Вывод изображения", C.use_gl ? (gl_ok ? L"OpenGL" : L"OpenGL (недоступен, GDI)") : L"GDI (после перезапуска)");
         add(L"Назад", 0);
         break; }
     case M_SPEED: {
@@ -646,6 +785,7 @@ static void build_menu(void)
         }
         add(L"Сбросить по умолчанию", 0);
         add(L"Назад", 0);
+        add(L"Какие геймпады слушать", C.pad_mode == 0 ? L"все" : C.pad_mode == 1 ? L"только Xbox (XInput)" : L"никакие");
         break;
     case M_HELP:
         wcscpy(m_title, L"Справка");
@@ -663,6 +803,7 @@ static void build_menu(void)
     }
 }
 
+static int item_y[32], item_h, item_first, item_count, item_x0, item_x1;
 static void draw_menu(void)
 {
     build_menu();
@@ -670,13 +811,17 @@ static void draw_menu(void)
     int pw = back_w * 3 / 4, ph = lh * (nitems + 2) + font_h;
     if (ph > back_h - 20) ph = back_h - 20;
     int px = (back_w - pw) / 2, py = (back_h - ph) / 2;
+    menu_rect[0] = px - 3; menu_rect[1] = py - 3; menu_rect[2] = pw + 6; menu_rect[3] = ph + 6;
+    item_h = lh; item_x0 = px; item_x1 = px + pw; item_count = 0;
     fill(px - 3, py - 3, pw + 6, ph + 6, RGBC(170, 180, 220));
     fill(px, py, pw, ph, RGBC(16, 28, 74));
     draw_text(px + font_h, py + font_h / 2, m_title, RGBC(255, 255, 255), font_big);
     int first = 0, rows = (ph - lh * 2) / lh;
     if (m_sel >= rows) first = m_sel - rows + 1;
+    item_first = first;
     for (int i = first; i < nitems && i - first < rows; i++) {
         int yy = py + lh * 2 + (i - first) * lh;
+        item_y[item_count++] = yy;
         if (i == m_sel) fill(px + font_h / 2, yy - 2, pw - font_h, lh, RGBC(60, 90, 170));
         draw_text(px + font_h, yy, items[i].label, i == m_sel ? RGBC(255, 255, 160) : RGBC(225, 230, 255), font_small);
         if (items[i].value[0]) {
@@ -724,7 +869,9 @@ static void menu_act(int dir)
         case 2: C.scale_mode = (C.scale_mode + 3 + d) % 3; break;
         case 3: C.smooth = !C.smooth; break;
         case 4: toggle_fullscreen(); break;
-        case 5: if (!dir) { m_page = M_MAIN; m_sel = 5; } break;
+        case 5: C.vsync = !C.vsync; break;
+        case 6: C.use_gl = !C.use_gl; set_status(L"вступит в силу после перезапуска"); break;
+        case 7: if (!dir) { m_page = M_MAIN; m_sel = 5; } break;
         }
     } else if (m_page == M_SPEED) {
         int d = dir ? dir : 1;
@@ -736,6 +883,9 @@ static void menu_act(int dir)
         case 3: C.autosave_min = C.autosave_min == 0 ? (d > 0 ? 5 : 15) : C.autosave_min + 5 * d; if (C.autosave_min > 15 || C.autosave_min < 0) C.autosave_min = 0; break;
         case 4: if (!dir) { m_page = M_MAIN; m_sel = 6; } break;
         }
+    } else if (m_page == M_PAD && i == NACT + 2) {
+        C.pad_mode = (C.pad_mode + 3 + (dir ? dir : 1)) % 3;
+        xi_user = joy_id = -1; xi_retry = joy_retry = 0;
     } else if (m_page == M_KEYS || m_page == M_PAD) {
         if (dir) return;
         if (i < NACT) { m_wait_bind = i; memset(keys, 0, sizeof keys); memcpy(code_prev, code_down, sizeof code_down); }
@@ -829,14 +979,52 @@ static void on_key(int vk, int alt)
     if (vk == VK_PAUSE) menu_set_open(1);
 }
 
+static int menu_hit(int mx, int my)
+{
+    if (!menu_open || mx < item_x0 || mx >= item_x1) return -1;
+    for (int k = 0; k < item_count; k++)
+        if (my >= item_y[k] - 2 && my < item_y[k] - 2 + item_h) return item_first + k;
+    return -1;
+}
+
 static LRESULT wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
+    int mx = (int)(short)(l & 0xFFFF), my = (int)(short)((l >> 16) & 0xFFFF);
     switch (m) {
+    case WM_SETCURSOR:
+        if ((l & 0xFFFF) == 1) {                /* HTCLIENT */
+            SetCursor(fullscreen && !menu_open ? 0 : LoadCursorW(0, IDC_ARROW));
+            return 1;
+        }
+        break;
+    case WM_MOUSEMOVE: {
+        static int lx = -1, ly = -1;
+        if (mx == lx && my == ly) return 0;     /* Windows repeats this message without movement */
+        lx = mx; ly = my;
+        int i = menu_hit(mx, my);
+        if (i >= 0 && m_wait_bind < 0) m_sel = i;
+        return 0;
+    }
+    case WM_LBUTTONDOWN:
+        if (menu_open && m_wait_bind < 0) { int i = menu_hit(mx, my); if (i >= 0) { m_sel = i; menu_act(0); } }
+        return 0;
+    case WM_RBUTTONDOWN:
+        if (menu_open) menu_back(); else menu_set_open(1);
+        return 0;
+    case WM_MOUSEWHEEL:
+        if (menu_open && m_wait_bind < 0) {
+            build_menu();
+            int d = (short)((w >> 16) & 0xFFFF);
+            m_sel = (m_sel + nitems + (d > 0 ? -1 : 1)) % nitems;
+        }
+        return 0;
     case WM_CLOSE: quit = 1; return 0;
     case WM_DESTROY: PostQuitMessage(0); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: { PAINTSTRUCT ps; BeginPaint(h, &ps); EndPaint(h, &ps); if (h == hwnd) present(); return 0; }
-    case WM_ACTIVATE: if ((w & 0xFFFF) == 0) memset(keys, 0, sizeof keys); return 0;
+    case WM_ACTIVATE:
+        if ((w & 0xFFFF) == 0) memset(keys, 0, sizeof keys);
+        return DefWindowProcW(h, m, w, l);     /* the default handler gives the window keyboard focus */
     case WM_KEYDOWN: case WM_SYSKEYDOWN:
         if (!(l & (1 << 30))) on_key((int)w, (l >> 29) & 1);
         keys[w & 255] = 1;
@@ -915,6 +1103,7 @@ static int run(void)
     hwnd = CreateWindowExW(0, wc.lpszClassName, APP_TITLE, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, ww, wh, 0, 0, inst, 0);
     if (!hwnd) return 1;
     video_init();
+    gl_ok = C.use_gl && gl_init();
 
     int argc = 0; LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     int loaded = 0;

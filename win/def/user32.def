@@ -33,3 +33,4 @@ ShowCursor
 GetKeyState
 MapVirtualKeyW
 GetKeyNameTextW
+SetCursor

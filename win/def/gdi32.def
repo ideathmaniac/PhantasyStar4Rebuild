@@ -17,3 +17,7 @@ GetTextExtentPoint32W
 CreateSolidBrush
 StretchBlt
 BitBlt
+ChoosePixelFormat
+SetPixelFormat
+SwapBuffers
+GdiFlush
