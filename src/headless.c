@@ -131,7 +131,8 @@ int main(int argc, char **argv)
             free(b);
         }
     }
-    if (getenv("WS")) { void ps4_ws_install(void); ps4_ws_install(); g_ws_ext = atoi(getenv("WS")); extern int g_ws_probe; g_ws_probe = 1; }
+    if (getenv("WS")) { void ps4_ws_install(void); ps4_ws_install(); g_ws_ext = atoi(getenv("WS")); extern int g_ws_probe; g_ws_probe = 1;
+                        void ps4_ws_patch_rom(int); ps4_ws_patch_rom(g_ws_ext); }
     if (getenv("HD")) {
         snprintf(hd_root, sizeof hd_root, "%s", getenv("HD"));
         hd_io_t io = { hdw, hdr, hdl, hdlog };

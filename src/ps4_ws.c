@@ -178,6 +178,19 @@ static uint8_t ws_pixel(int plane, int sx, int line)
     return vdp_tile_pixel((uint16_t)t, wx & 7, wy & 7);
 }
 
+/* The game culls sprite pieces outside the 320-pixel view; widen the test
+ * (hints.json "patches", which the recompiler builds into the generated
+ * code). Written into the ROM image too, for the interpreter. */
+void ps4_ws_patch_rom(int ext)
+{
+    static const uint32_t lo[3] = { 0x044C08, 0x044C86, 0x044D4E }, hi[3] = { 0x044C0C, 0x044C8A, 0x044D52 };
+    for (int i = 0; i < 3; i++) {
+        uint16_t a = (uint16_t)(0x41 - ext), b = (uint16_t)(0x17F + 2 * ext);
+        g_rom[lo[i]] = (uint8_t)(a >> 8); g_rom[lo[i] + 1] = (uint8_t)a;
+        g_rom[hi[i]] = (uint8_t)(b >> 8); g_rom[hi[i] + 1] = (uint8_t)b;
+    }
+}
+
 void ps4_ws_install(void)
 {
     g_ws_begin = ws_begin;

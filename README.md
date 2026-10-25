@@ -7,15 +7,32 @@ recompiling the game's 68000 code to C. Targets the Russian fan translation
 
 **No game data is included.** The recompiled C (`generated/`) is produced from your own ROM.
 
+## Two builds
+- **PS4.exe from the release** contains no game code: it runs your ROM on the built-in
+  68000 interpreter, with every feature below (output identical to the recompiled build,
+  frame for frame, in the tests). Build it with `FREE=1 ./build_win.sh`.
+- **The recompiled build** (`./build_win.sh` after generating `generated/` from your ROM)
+  runs the game as native code. It contains code translated from the ROM, so it is
+  never published.
+
 ## Features
 - 68000 → C recompiler (~72k instructions, ~1900 functions) with an interpreter fallback
   for code found only at run time (RAM code, handlers called through pointers).
-- Own Mega Drive model: VDP with per-line rendering and H-interrupts, Z80, YM2612, PSG.
-- Widescreen 16:9 / 16:10 on field maps, painted from the game's own map data; sprite
-  culling widened through recompiler patches (`hints.json`).
-- HD: 4× edge-directed pixel-art upscaler, multi-threaded.
-- Pause menu, rebinding, XInput and DirectInput (WinMM) gamepads, rewind, fast-forward,
-  battle speed-up, autosave, save states.
+- Own Mega Drive model: VDP with per-line rendering and H-interrupts, Z80, YM2612, PSG;
+  band-limited (windowed sinc) resampling to 48 kHz, optional tone filter.
+- Widescreen 16:9 / 16:10 on field maps, painted from the game's own map data, and in
+  battles (background mirrored at the sides); sprite culling widened (`hints.json`).
+- Direct3D 11 output (flip model) with OpenGL 2.0 and GDI fallbacks; shader filters
+  shared between HLSL and GLSL: sharp pixels, edge-directed pixel-art smoothing, CRT,
+  curved CRT, dither blending, a picture-tube look applied only to story pictures,
+  blurred side bars.
+- HD packs: capture screen layers (F9 or automatically), upscale them with any tool,
+  import; tiles are replaced at draw time and recoloured through palette fades.
+- Clock-paced frames with dynamic audio rate control (smooth on 60–360 Hz monitors).
+- Pause menu with mouse, rebinding, XInput and DirectInput gamepads, rewind,
+  fast-forward, battle speed-up, autosave, save slots with pictures and dates, play
+  statistics, screenshots (F12).
+- Crash and hang reports (crash.txt, minidump, hang.txt) for bug reports.
 
 ## Verification
 - 68000 interpreter: 818k SingleStepTests vectors; Z80: 627k of 630k.
@@ -28,6 +45,7 @@ python3 tools/trace.py rom/ps4_rus.bin hints.json out        # code map
 python3 tools/recomp.py rom/ps4_rus.bin out/codemap.json generated
 make                                  # Linux headless runner (lockstep tests)
 ./build_win.sh                        # PS4.exe for Windows (clang + lld-link, no SDK)
+FREE=1 ./build_win.sh                 # the same without game code (interpreter only)
 ```
 Tests: `make tests` (68000 vectors), `tests/z80_run.c`, `tests/emu_test.c`, `tests/rw_test.c`.
 

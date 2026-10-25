@@ -1572,7 +1572,7 @@ static int load_rom_file(const wchar_t *path, int quiet)
     int kind = emu_load_rom(b, n);
     free(b);
     rom_kind_loaded = kind;
-    logw("rom %lu bytes, kind %d", (unsigned long)n, kind);
+    logw("rom %lu bytes, kind %d, recompiled code %s", (unsigned long)n, kind, emu_has_recompiled_code() ? "yes" : "no (interpreter build)");
     if (kind == EMU_ROM_BAD) {
         if (!quiet) MessageBoxW(hwnd, L"Это не похоже на ROM Mega Drive.", L"Ошибка", MB_OK | MB_ICONERROR);
         return 0;

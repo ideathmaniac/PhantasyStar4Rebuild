@@ -7,7 +7,8 @@
 #define EMU_FPS_NUM 53693175.0           /* NTSC master clock */
 #define EMU_FPS (EMU_FPS_NUM / (3420.0 * 262.0))   /* 59.92 Hz */
 
-enum { EMU_ROM_BAD = 0, EMU_ROM_RECOMPILED = 1, EMU_ROM_INTERPRETED = 2 };
+enum { EMU_ROM_BAD = 0, EMU_ROM_RECOMPILED = 1 /* the known ROM */, EMU_ROM_INTERPRETED = 2 /* any other ROM */ };
+int  emu_has_recompiled_code(void);   /* 0 in the build that ships no game code */
 
 /* Load a ROM image. Returns EMU_ROM_RECOMPILED for the exact dump the code
  * was generated from (Phantasy Star IV J + Russian translation fix v7),

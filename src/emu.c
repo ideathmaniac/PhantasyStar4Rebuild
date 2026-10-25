@@ -59,11 +59,16 @@ int emu_load_rom(const uint8_t *data, size_t size)
     emu_sha1_hex(data, size, h);
     rom_kind = strcmp(h, EMU_ROM_SHA1) == 0 ? EMU_ROM_RECOMPILED : EMU_ROM_INTERPRETED;
     cpu_lookup = 0;
+    if (rom_kind == EMU_ROM_RECOMPILED) {
+        /* the known ROM: its own features (widescreen, battles, story pictures)
+         * work with or without the recompiled code; without it (the build
+         * that ships no game code) the interpreter runs everything */
 #ifdef PS4_RECOMP
-    if (rom_kind == EMU_ROM_RECOMPILED) { ps4_recomp_install(); ps4_ws_install(); { extern int g_ws_probe; g_ws_probe = 1; } }
-#else
-    if (rom_kind == EMU_ROM_RECOMPILED) rom_kind = EMU_ROM_INTERPRETED;
+        ps4_recomp_install();
 #endif
+        ps4_ws_install();
+        { extern int g_ws_probe; g_ws_probe = 1; }
+    }
     return rom_kind;
 }
 
@@ -105,6 +110,16 @@ void emu_set_widescreen(int ext)
 {
     if (rom_kind != EMU_ROM_RECOMPILED) ext = 0;
     g_ws_ext = ext < 0 ? 0 : ext > 64 ? 64 : ext;
+    if (rom_kind == EMU_ROM_RECOMPILED) { void ps4_ws_patch_rom(int); ps4_ws_patch_rom(g_ws_ext); }
+}
+
+int emu_has_recompiled_code(void)
+{
+#ifdef PS4_RECOMP
+    return 1;
+#else
+    return 0;
+#endif
 }
 
 void emu_set_widescreen_battles(int on) { extern int g_ws_battle; g_ws_battle = on; }
