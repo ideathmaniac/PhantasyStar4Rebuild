@@ -35,6 +35,8 @@ extern const char EMU_ROM_SHA1[];
  * the field map; battles and cutscenes stay 320 wide. */
 void emu_set_widescreen(int ext);
 int  emu_in_battle(void);     /* Phantasy Star IV game mode $FFEC20 == $14 */
-int  emu_on_field(void);      /* the last frame showed the walkable field map, no windows */
+int  emu_on_field(void);
+int  emu_game_mode(void);     /* $FFEC20 */
+uint32_t emu_cpu_pc(void);   /* last 68000 instruction started */      /* the last frame showed the walkable field map, no windows */
 
 #endif

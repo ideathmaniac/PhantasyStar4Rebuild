@@ -12,6 +12,7 @@
 #include "../src/md.h"
 #include "../src/hdscale.h"
 #include "../src/rewind.h"
+#include "diag.h"
 
 int _fltused = 0x9875;
 
@@ -109,30 +110,8 @@ static void logw(const char *fmt, ...)
     va_end(a);
     fprintf(logf, "[%lu] %s\n", (unsigned long)(frame_no), b);
     fflush(logf);
-}
-
-/* crash.txt: exception code and where it happened */
-static LONG crash_filter(EXCEPTION_POINTERS *ep)
-{
-    wchar_t p[700]; wcscpy(p, exe_dir); wcscat(p, L"crash.txt");
-    FILE *f = _wfopen(p, L"w");
-    uintptr_t base = (uintptr_t)GetModuleHandleW(0);
-    uintptr_t addr = (uintptr_t)ep->ExceptionRecord->ExceptionAddress;
-    extern uint32_t cpu_cur_pc;
-    if (f) {
-        fprintf(f, "PS4 recomp crash\ncode %08lX\naddress exe+%llX\n", (unsigned long)ep->ExceptionRecord->ExceptionCode,
-                (unsigned long long)(addr - base));
-        if (ep->ExceptionRecord->NumberParameters >= 2)
-            fprintf(f, "access %s %llX\n", ep->ExceptionRecord->ExceptionInformation[0] ? "write" : "read",
-                    (unsigned long long)ep->ExceptionRecord->ExceptionInformation[1]);
-        fprintf(f, "68000 pc %06X  frame %lu\n", cpu_cur_pc, (unsigned long)frame_no);
-        fclose(f);
-    }
-    if (logf) { fprintf(logf, "CRASH code %08lX at exe+%llX, 68k pc %06X\n", (unsigned long)ep->ExceptionRecord->ExceptionCode,
-                        (unsigned long long)(addr - base), cpu_cur_pc); fflush(logf); }
-    MessageBoxW(0, L"Программа аварийно завершилась. Отчёт записан в crash.txt рядом с PS4.exe — пришлите его, пожалуйста.",
-                L"Phantasy Star IV", MB_OK | MB_ICONERROR);
-    return 1;   /* EXCEPTION_EXECUTE_HANDLER: terminate */
+    char nb[200]; _snprintf(nb, 199, "[%lu] %s", (unsigned long)frame_no, b); nb[199] = 0;
+    diag_note(nb);
 }
 
 static uint8_t *read_file(const wchar_t *path, size_t *n)
@@ -245,6 +224,7 @@ static HWAVEOUT wo;
 static WAVEHDR hdr[NHDR];
 static int16_t *abuf[NHDR];
 static int audio_ok;
+static uint64_t audio_full_since;
 
 static void audio_init(void)
 {
@@ -462,6 +442,7 @@ static struct { const uint32_t *src; int w, h; } hd_job;
 static DWORD hd_worker(void *arg)
 {
     int i = (int)(intptr_t)arg;
+    diag_thread_init();
     for (;;) {
         WaitForSingleObject(hd_go[i], INFINITE);
         int y0 = hd_job.h * i / hd_threads, y1 = hd_job.h * (i + 1) / hd_threads;
@@ -635,6 +616,8 @@ static void present(void)
     if (cw < 1 || ch < 1) return;
     ensure_back(cw, ch);
     int W, H; const uint32_t *fb = emu_framebuffer(&W, &H);
+    if (W < 1 || W > MD_W_MAX) W = 320;
+    if (H < 1 || H > 224) H = 224;
     int x, y, w, h;
     dest_rect(cw, ch, W, &x, &y, &w, &h);
     if (C.hd) run_hd(fb, W, H);
@@ -668,7 +651,12 @@ static void present(void)
         int *rects[2] = { menu_rect, status_rect };
         for (int k = 0; k < 2; k++) {
             int *r = rects[k];
-            if (r[2] <= 0 || r[3] <= 0) continue;
+            /* keep the copied box inside the back buffer */
+            if (r[0] < 0) { r[2] += r[0]; r[0] = 0; }
+            if (r[1] < 0) { r[3] += r[1]; r[1] = 0; }
+            if (r[0] + r[2] > back_w) r[2] = back_w - r[0];
+            if (r[1] + r[3] > back_h) r[3] = back_h - r[1];
+            if (r[2] <= 0 || r[3] <= 0 || cw > back_w || ch > back_h) continue;
             GdiFlush();
             int tw = gl_npot ? cw : pot(cw), th = gl_npot ? ch : pot(ch);
             if (!tex_ovl || tw != ovl_tw || th != ovl_th) { gl_new_tex(&tex_ovl, tw, th); ovl_tw = tw; ovl_th = th; }
@@ -884,6 +872,7 @@ static void menu_act(int dir)
 {
     build_menu();
     int i = m_sel;
+    logw("menu page %d item %d %s", m_page, i, dir ? (dir < 0 ? "left" : "right") : "select");
     if (m_page == M_MAIN) {
         if (i != 12) m_confirm_quit = 0;
         switch (i) {
@@ -1094,6 +1083,7 @@ static int pick_rom(void)
     return 1;
 }
 
+static int rom_kind_loaded;
 static int load_rom_file(const wchar_t *path, int quiet)
 {
     size_t n = 0;
@@ -1101,6 +1091,7 @@ static int load_rom_file(const wchar_t *path, int quiet)
     if (!b) { if (!quiet) MessageBoxW(hwnd, L"Не удалось прочитать файл ROM.", L"Ошибка", MB_OK | MB_ICONERROR); return 0; }
     int kind = emu_load_rom(b, n);
     free(b);
+    rom_kind_loaded = kind;
     logw("rom %lu bytes, kind %d", (unsigned long)n, kind);
     if (kind == EMU_ROM_BAD) {
         if (!quiet) MessageBoxW(hwnd, L"Это не похоже на ROM Mega Drive.", L"Ошибка", MB_OK | MB_ICONERROR);
@@ -1118,6 +1109,15 @@ static int load_rom_file(const wchar_t *path, int quiet)
 /* ======================================================================
  * Main loop
  * ====================================================================== */
+static const char *settings_info(void)
+{
+    static char b[200];
+    _snprintf(b, 199, "ws %d hd %d gl %d vsync %d full %d scale %d smooth %d rewind %d battle x%d hd-threads %d rom-kind %d",
+              C.ws_mode, C.hd, gl_ok, C.vsync, fullscreen, C.scale_mode, C.smooth, C.rewind, C.battle_speed, hd_threads, rom_kind_loaded);
+    b[199] = 0;
+    return b;
+}
+
 static int run(void)
 {
     QueryPerformanceFrequency(&qpc_freq);
@@ -1125,8 +1125,18 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    SetUnhandledExceptionFilter(crash_filter);
-    logw("start, version 0.4");
+    diag_init(exe_dir, "0.5");
+    diag_info = settings_info;
+    logw("start, version 0.5");
+    /* another copy still running (for example stuck after a crash) */
+    CreateMutexW(0, 0, L"PS4Recomp.single");
+    if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
+        logw("another copy is running");
+        if (MessageBoxW(0, L"Phantasy Star IV уже запущена (или зависла после сбоя и осталась в памяти).\n\n"
+                           L"Если окна не видно, закройте PS4.exe в Диспетчере задач (Ctrl+Shift+Esc).\n\n"
+                           L"Всё равно запустить ещё одну копию?", L"Phantasy Star IV",
+                        MB_YESNO | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND) != IDYES) return 0;
+    }
     /* a "running" marker that only a clean exit removes */
     wchar_t marker[700]; path_in_exe_dir(marker, L"running.flag");
     int crashed_before = GetFileAttributesW(marker) != 0xFFFFFFFF;
@@ -1142,7 +1152,7 @@ static int run(void)
 
     cfg_load();
     if (crashed_before && MessageBoxW(0, L"Прошлый запуск завершился аварийно.\n\nСбросить настройки (графика, управление, полный экран)? "
-                                       L"Сохранения игры не затрагиваются.", L"Phantasy Star IV", MB_YESNO | MB_ICONINFORMATION) == IDYES) {
+                                       L"Сохранения игры не затрагиваются.", L"Phantasy Star IV", MB_YESNO | MB_ICONINFORMATION | MB_TOPMOST | MB_SETFOREGROUND) == IDYES) {
         cfg_defaults();
         logw("settings reset after a crash");
     }
@@ -1154,6 +1164,7 @@ static int run(void)
     if (C.win_w > 200 && C.win_h > 150) { ww = C.win_w; wh = C.win_h; }
     hwnd = CreateWindowExW(0, wc.lpszClassName, APP_TITLE, WS_OVERLAPPEDWINDOW, CW_USEDEFAULT, CW_USEDEFAULT, ww, wh, 0, 0, inst, 0);
     if (!hwnd) return 1;
+    diag_set_window(hwnd);
     video_init();
     gl_ok = C.use_gl && gl_init();
     logw("window ok, opengl %d (%s), hd threads %d", gl_ok, gl_ok ? (const char *)glGetString(GL_VERSION) : "-", hd_threads);
@@ -1189,6 +1200,7 @@ static int run(void)
     static int16_t snd[8192];
 
     while (!quit) {
+        diag_heartbeat(frame_no);
         MSG msg;
         while (PeekMessageW(&msg, 0, 0, 0, PM_REMOVE)) {
             if (msg.message == WM_QUIT) quit = 1;
@@ -1218,7 +1230,13 @@ static int run(void)
          * displayed frame, so turbo and battle speed-up run N times faster) */
         if (!rewinding) {
             if (audio_ok) {
-                if (audio_queued() > 2400) { Sleep(1); continue; }
+                if (audio_queued() > 2400) {
+                    /* a sound device that stops taking data must not freeze the game */
+                    if (!audio_full_since) audio_full_since = t;
+                    if (t - audio_full_since > 1000) { logw("sound device stalled, resetting it"); waveOutReset(wo); audio_full_since = 0; }
+                    Sleep(1); continue;
+                }
+                audio_full_since = 0;
             } else {
                 if ((double)t < next_frame) { Sleep(1); continue; }
                 next_frame += frame_ms;
@@ -1249,6 +1267,12 @@ static int run(void)
                 if (i == 0) audio_submit(snd, n);
         }
         present();
+        {
+            static int last_mode = -1;
+            int mode = emu_game_mode();
+            if (mode != last_mode) { logw("game mode %02X, 68k pc %06X", mode, emu_cpu_pc()); last_mode = mode; }
+            if (frame_no % 3600 == 0) logw("alive, game mode %02X, 68k pc %06X", mode, emu_cpu_pc());
+        }
 
         if (emu_sram_dirty()) sram_pending = 1;
         if (sram_pending && frame_no % 120 == 0) { sram_write(); sram_pending = 0; }

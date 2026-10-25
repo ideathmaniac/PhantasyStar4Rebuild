@@ -87,6 +87,7 @@ int main(int argc, char **argv)
         }
     }
     run_reset();
+    if (getenv("SRAM_IN")) { FILE *sf = fopen(getenv("SRAM_IN"), "rb"); if (sf) { fread(g_sram, 1, sizeof g_sram, sf); fclose(sf); } }
 #ifdef PS4_RECOMP
     { void ps4_recomp_install(void); if (!getenv("INTERP_ONLY")) ps4_recomp_install(); }
 #endif
@@ -119,6 +120,7 @@ int main(int argc, char **argv)
             save_ppm(p);
         }
     }
+    if (getenv("SRAM_OUT")) { FILE *sf = fopen(getenv("SRAM_OUT"), "wb"); fwrite(g_sram, 1, sizeof g_sram, sf); fclose(sf); fprintf(stderr, "sram dirty %d\n", g_sram_dirty); }
     if (getenv("YMDUMP")) { void ym_debug_dump(void); ym_debug_dump(); }
     if (log) fclose(log);
     if (wav) {

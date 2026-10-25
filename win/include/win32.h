@@ -11,6 +11,7 @@ typedef unsigned short WORD;
 typedef unsigned long DWORD;          /* 32-bit on Windows (LLP64) */
 typedef unsigned int UINT;
 typedef long LONG;
+typedef unsigned long ULONG;
 typedef short SHORT;
 typedef uintptr_t WPARAM, UINT_PTR, DWORD_PTR, ULONG_PTR;
 typedef intptr_t LPARAM, LRESULT, LONG_PTR, INT_PTR;
@@ -97,6 +98,38 @@ HMODULE LoadLibraryW(LPCWSTR);
 FARPROC GetProcAddress(HMODULE, const char *);
 HLOCAL LocalFree(HLOCAL);
 BOOL CreateDirectoryW(LPCWSTR, void *);
+/* kernel32: diagnostics */
+typedef LONG (*VECTORED_EXCEPTION_HANDLER)(EXCEPTION_POINTERS *);
+void *AddVectoredExceptionHandler(ULONG, VECTORED_EXCEPTION_HANDLER);
+BOOL SetThreadStackGuarantee(ULONG *);
+HANDLE CreateFileW(LPCWSTR, DWORD, DWORD, void *, DWORD, DWORD, HANDLE);
+BOOL WriteFile(HANDLE, const void *, DWORD, DWORD *, void *);
+BOOL FlushFileBuffers(HANDLE);
+BOOL CloseHandle(HANDLE);
+DWORD GetEnvironmentVariableW(LPCWSTR, LPWSTR, DWORD);
+DWORD GetCurrentThreadId(void);
+HANDLE GetCurrentThread(void);
+HANDLE GetCurrentProcess(void);
+DWORD GetCurrentProcessId(void);
+BOOL DuplicateHandle(HANDLE, HANDLE, HANDLE, HANDLE *, DWORD, BOOL, DWORD);
+DWORD SuspendThread(HANDLE);
+DWORD ResumeThread(HANDLE);
+BOOL GetThreadContext(HANDLE, void *);
+BOOL GetModuleHandleExW(DWORD, LPCWSTR, HMODULE *);
+BOOL TerminateProcess(HANDLE, UINT);
+HANDLE CreateMutexW(void *, BOOL, LPCWSTR);
+DWORD GetLastError(void);
+uint64_t GetTickCount64(void);
+#define GENERIC_WRITE 0x40000000u
+#define FILE_SHARE_READ 1
+#define CREATE_ALWAYS 2
+#define FILE_ATTRIBUTE_NORMAL 0x80
+#define INVALID_HANDLE_VALUE ((HANDLE)(intptr_t)-1)
+#define DUPLICATE_SAME_ACCESS 2
+#define GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT 2
+#define GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS 4
+#define MB_TOPMOST 0x40000
+#define MB_SETFOREGROUND 0x10000
 /* user32 */
 UINT RegisterClassExW(const WNDCLASSEXW *);
 HWND CreateWindowExW(DWORD, LPCWSTR, LPCWSTR, DWORD, int, int, int, int, HWND, HMENU, HINSTANCE, void *);
