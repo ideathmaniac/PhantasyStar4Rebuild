@@ -228,7 +228,9 @@ static int state_load(int slot)
 }
 
 /* ======================================================================
- * Audio (waveOut; the queue length paces the game)
+ * Audio (waveOut). The game is paced by the clock (see run()); the sound
+ * is resampled by up to 0.5% so the queue stays near A_TARGET, which keeps
+ * both the picture and the sound even at any monitor refresh rate.
  * ====================================================================== */
 #define NHDR 32
 #define HDR_FRAMES 4096
@@ -236,7 +238,6 @@ static HWAVEOUT wo;
 static WAVEHDR hdr[NHDR];
 static int16_t *abuf[NHDR];
 static int audio_ok;
-static uint64_t audio_full_since;
 
 static void audio_init(void)
 {
@@ -247,9 +248,28 @@ static void audio_init(void)
     for (int i = 0; i < NHDR; i++) { abuf[i] = calloc(HDR_FRAMES, 4); memset(&hdr[i], 0, sizeof hdr[i]); hdr[i].dwFlags = WHDR_DONE; }
     audio_ok = 1;
 }
+#define A_TARGET 3600                         /* queued sound to aim for: 75 ms */
+static uint64_t a_written, a_played, a_moved_ms;
+static DWORD a_lastpos;
+typedef struct { UINT wType; DWORD sample; DWORD pad; } MMTIME_;
+MMRESULT waveOutGetPosition(HWAVEOUT, MMTIME_ *, UINT);
+static void audio_reset(void)
+{
+    waveOutReset(wo);
+    a_lastpos = 0; a_played = a_written;
+}
+/* sound written but not played yet, in sample frames */
 static int audio_queued(void)
 {
-    int q = 0;
+    MMTIME_ mt; memset(&mt, 0, sizeof mt); mt.wType = 2;   /* TIME_SAMPLES */
+    if (waveOutGetPosition(wo, &mt, sizeof mt) == 0 && mt.wType == 2) {
+        DWORD d = mt.sample - a_lastpos;
+        if (d) a_moved_ms = now_ms();
+        a_played += d; a_lastpos = mt.sample;
+        if (a_played > a_written) a_played = a_written;
+        return (int)(a_written - a_played);
+    }
+    int q = 0;                                  /* driver without positions: count the buffers */
     for (int i = 0; i < NHDR; i++) if (!(hdr[i].dwFlags & WHDR_DONE)) q += (int)(hdr[i].dwBufferLength / 4);
     return q;
 }
@@ -265,9 +285,45 @@ static void audio_submit(int16_t *s, int frames)
         memset(&hdr[i], 0, sizeof hdr[i]);
         hdr[i].lpData = (char *)abuf[i]; hdr[i].dwBufferLength = (DWORD)frames * 4;
         waveOutPrepareHeader(wo, &hdr[i], sizeof hdr[i]);
-        waveOutWrite(wo, &hdr[i], sizeof hdr[i]);
+        if (waveOutWrite(wo, &hdr[i], sizeof hdr[i]) == 0) a_written += (uint64_t)frames;
         return;
     }
+}
+
+/* one emulated frame of sound: resampled toward the target queue length */
+static void audio_push(const int16_t *in, int n)
+{
+    if (!audio_ok || n <= 0) return;
+    int q = audio_queued();
+    uint64_t t = now_ms();
+    if (q > 0 && t - a_moved_ms > 1000 && a_moved_ms) {
+        logw("sound device stalled, resetting it"); audio_reset(); q = 0; a_moved_ms = t;
+    }
+    if (q > A_TARGET * 4) return;               /* far too much queued (after a stall): skip */
+    static int16_t buf[2 * 4200];
+    if (q < 400) {                              /* ran dry: refill with silence at once */
+        int z = A_TARGET - q - n;
+        if (z > 4096) z = 4096;
+        if (z > 0) { memset(buf, 0, (size_t)z * 4); audio_submit(buf, z); }
+    }
+    double d = (double)(A_TARGET - q) / A_TARGET * 0.005;
+    if (d > 0.005) d = 0.005;
+    if (d < -0.005) d = -0.005;
+    double step = 1.0 / (1.0 + d);
+    /* linear interpolation over [previous sample, in...] */
+    static double pos;
+    static int16_t prev[2];
+    int m = 0;
+    while (pos < n && m < 4200) {
+        int i = (int)pos; double f = pos - i;
+        const int16_t *a = i == 0 ? prev : in + (i - 1) * 2, *b = in + i * 2;
+        buf[m * 2] = (int16_t)(a[0] + (b[0] - a[0]) * f);
+        buf[m * 2 + 1] = (int16_t)(a[1] + (b[1] - a[1]) * f);
+        m++; pos += step;
+    }
+    pos -= n;
+    prev[0] = in[(n - 1) * 2]; prev[1] = in[(n - 1) * 2 + 1];
+    audio_submit(buf, m);
 }
 static void audio_close(void)
 {
@@ -1074,18 +1130,13 @@ static void game_frames(int fast)
     emu_set_pad(0, game_pad());
     int frames = fast ? C.turbo_speed : 1;
     if (!fast && C.battle_speed > 1 && emu_in_battle()) frames = C.battle_speed;
-    /* the sound queue ran low (the window was dragged, the PC was busy):
-     * catch up with an extra frame whose sound is played too, otherwise the
-     * queue stays near empty and every hiccup becomes a stutter */
-    int with_sound = 1;
-    if (frames == 1 && audio_ok && audio_queued() < 1600) { frames = 2; with_sound = 2; }
     for (int i = 0; i < frames; i++) {
         emu_run_frame();
         frame_no++;
         if (C.rewind && (frame_no & 1)) rw_push();
         int n;
         while ((n = emu_audio(snd, 4096)) > 0)
-            if (i < with_sound) audio_submit(snd, n);
+            if (i == 0) audio_push(snd, n);
     }
     present();
     static int last_mode = -1;
@@ -1094,14 +1145,32 @@ static void game_frames(int fast)
     if (frame_no % 3600 == 0) logw("alive, game mode %02X, 68k pc %06X", mode, emu_cpu_pc());
 }
 
+/* pacing: one emulated frame every 1/59.92 s by the performance counter */
+static double pace_next;
+static const double frame_ms = 1000.0 / EMU_FPS;
+static double clock_ms(void) { int64_t t; QueryPerformanceCounter(&t); return (double)t * 1000.0 / (double)qpc_freq; }
+static void pace_reset(void) { pace_next = clock_ms(); }
+/* 1 when the next frame is due (waits the last few milliseconds precisely) */
+static int pace_due(int may_wait)
+{
+    double now = clock_ms();
+    if (now < pace_next) {
+        if (!may_wait || pace_next - now > 3.0) return 0;
+        while ((now = clock_ms()) < pace_next) { if (pace_next - now > 1.2) Sleep(1); else Sleep(0); }
+    }
+    pace_next += frame_ms;
+    if (now - pace_next > 100) pace_next = now;   /* fell far behind (a stall): do not race */
+    return 1;
+}
+
 /* Windows runs its own loop while the window is dragged or resized; a timer
  * keeps the game going meanwhile */
 static int in_sizemove;
 static void sizemove_tick(void)
 {
     diag_heartbeat(frame_no);
-    if (menu_open) { present(); return; }
-    for (int k = 0; k < 3 && (!audio_ok || audio_queued() <= 2400); k++) game_frames(0);
+    if (menu_open) { present(); pace_reset(); return; }
+    for (int k = 0; k < 3 && pace_due(0); k++) game_frames(0);
 }
 
 static LRESULT wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
@@ -1216,9 +1285,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.10");
+    diag_init(exe_dir, "0.11");
     diag_info = settings_info;
-    logw("start, version 0.10");
+    logw("start, version 0.11");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
@@ -1293,8 +1362,7 @@ static int run(void)
     cfg_save();
     if (first_run) { menu_set_open(1); m_page = M_HELP; }
 
-    const double frame_ms = 1000.0 / EMU_FPS;
-    double next_frame = (double)now_ms();
+    pace_reset();
     int sram_pending = 0;
     uint64_t last_autosave = now_ms();
     while (!quit) {
@@ -1313,7 +1381,7 @@ static int run(void)
             menu_pad();
             present();
             Sleep(16);
-            next_frame = (double)now_ms();
+            pace_reset();
             continue;
         }
 
@@ -1324,23 +1392,9 @@ static int run(void)
         int fast = act_down[A_TURBO];
         int rewinding = C.rewind && act_down[A_REWIND];
 
-        /* pacing: the sound queue (only one frame of sound is queued per
-         * displayed frame, so turbo and battle speed-up run N times faster) */
-        if (!rewinding) {
-            if (audio_ok) {
-                if (audio_queued() > 2400) {
-                    /* a sound device that stops taking data must not freeze the game */
-                    if (!audio_full_since) audio_full_since = t;
-                    if (t - audio_full_since > 1000) { logw("sound device stalled, resetting it"); waveOutReset(wo); audio_full_since = 0; }
-                    Sleep(1); continue;
-                }
-                audio_full_since = 0;
-            } else {
-                if ((double)t < next_frame) { Sleep(1); continue; }
-                next_frame += frame_ms;
-                if ((double)t - next_frame > 100) next_frame = (double)t;
-            }
-        }
+        /* pacing by the clock (turbo and battle speed-up run several emulated
+         * frames per displayed one; only the first one's sound is played) */
+        if (!pace_due(1)) { Sleep(1); continue; }
 
         if (rewinding) {
             /* two steps back per displayed frame; no sound while rewinding */
@@ -1349,7 +1403,6 @@ static int run(void)
             emu_run_frame();                        /* draws the picture of that moment */
             int n; while ((n = emu_audio(snd, 4096)) > 0) {}
             present();
-            Sleep(16);
             continue;
         }
 

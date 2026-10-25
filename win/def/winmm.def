@@ -10,3 +10,4 @@ timeBeginPeriod
 timeEndPeriod
 joyGetNumDevs
 joyGetPosEx
+waveOutGetPosition
