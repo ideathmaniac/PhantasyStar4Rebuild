@@ -1125,9 +1125,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.5");
+    diag_init(exe_dir, "0.6");
     diag_info = settings_info;
-    logw("start, version 0.5");
+    logw("start, version 0.6");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
