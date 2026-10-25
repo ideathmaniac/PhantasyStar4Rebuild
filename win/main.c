@@ -13,6 +13,7 @@
 #include "../src/hdscale.h"
 #include "../src/rewind.h"
 #include "diag.h"
+#include "glfx.h"
 
 int _fltused = 0x9875;
 
@@ -36,10 +37,12 @@ typedef struct {
     uint16_t pad[NACT][NPAD];
     wchar_t rom[600];
     int32_t pad_mode, vsync, use_gl;       /* added in 0.3 */
+    int32_t fx_mode, fx_dither;            /* added in 0.9 */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
 #define CFG_V2_SIZE (offsetof(cfg_t, pad_mode))
+#define CFG_V3_SIZE (offsetof(cfg_t, fx_mode))
 static cfg_t C;
 
 /* pad input codes */
@@ -61,6 +64,7 @@ static void cfg_defaults(void)
     C.ws_mode = 2; C.hd = 0; C.scale_mode = 0; C.smooth = 0; C.battle_speed = 1; C.turbo_speed = 3;
     C.rewind = 1; C.autosave_min = 5; C.volume = 100; C.slot = 1;
     C.pad_mode = 0; C.vsync = 1; C.use_gl = 1;
+    C.fx_mode = FX_PIXELS; C.fx_dither = 1;
     static const uint16_t k[NACT][NKEY] = {
         { VK_UP, 'W' }, { VK_DOWN, 'S' }, { VK_LEFT, 'A' }, { VK_RIGHT, 'D' },
         { 'Z', 'J' }, { 'X', 'K' }, { 'C', VK_SPACE }, { VK_RETURN, 0 },
@@ -153,8 +157,11 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION)
-        memcpy(&C, b, n);                      /* a 0.2 file keeps the new fields at their defaults */
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+        memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
+        if (n < sizeof C && C.hd) C.fx_mode = FX_SMOOTH;
+    }
+    if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
     else if (n >= 20 + 1200 && *(uint32_t *)b == 0x31475043u)   /* version 1 file: keep the ROM path */
         memcpy(C.rom, b + 20, 1200);
     free(b);
@@ -544,7 +551,12 @@ static int menu_rect[4], status_rect[4];   /* x, y, w, h of overlay boxes drawn 
 /* ---------- OpenGL path (GPU scaling, vsync) ---------- */
 static HDC gl_dc;
 static HGLRC gl_rc;
-static int gl_ok, gl_npot;
+static int gl_ok, gl_npot, fx_ok;
+static void *gl_getproc(const char *n)
+{
+    void *p = wglGetProcAddress(n);
+    return ((uintptr_t)p <= 3 || (intptr_t)p == -1) ? 0 : p;
+}
 static GLuint tex_frame, tex_hd, tex_ovl;
 static int ovl_tw, ovl_th;
 typedef BOOL (*swap_interval_t)(int);
@@ -620,7 +632,8 @@ static void present(void)
     if (H < 1 || H > 224) H = 224;
     int x, y, w, h;
     dest_rect(cw, ch, W, &x, &y, &w, &h);
-    if (C.hd) run_hd(fb, W, H);
+    int cpu_hd = !fx_ok && C.fx_mode == FX_SMOOTH;
+    if (cpu_hd) run_hd(fb, W, H);
 
     /* overlays are drawn with GDI into the back buffer, then copied */
     menu_rect[2] = status_rect[2] = 0;
@@ -637,7 +650,9 @@ static void present(void)
         glMatrixMode(GL_PROJECTION); glLoadIdentity(); glOrtho(0, cw, ch, 0, -1, 1);
         glMatrixMode(GL_MODELVIEW); glLoadIdentity();
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
-        if (C.hd) {
+        if (fx_ok) {
+            glfx_draw(fb, W, H, MD_W_MAX, x, y, w, h, cw, ch, C.fx_mode, C.smooth, C.fx_dither);
+        } else if (cpu_hd) {
             glBindTexture(GL_TEXTURE_2D, tex_hd);
             glPixelStorei(GL_UNPACK_ROW_LENGTH, MD_W_MAX * 4);
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W * 4, H * 4, GL_BGRA_EXT, GL_UNSIGNED_BYTE, hd_buf);
@@ -678,7 +693,7 @@ static void present(void)
     for (int i = 0; i < 4; i++) if (bars[i].right > bars[i].left && bars[i].bottom > bars[i].top) FillRect(dc, &bars[i], black);
     SetStretchBltMode(dc, C.smooth ? HALFTONE : COLORONCOLOR);
     if (C.smooth) SetBrushOrgEx(dc, 0, 0, 0);
-    if (C.hd) StretchDIBits(dc, x, y, w, h, 0, 0, W * 4, H * 4, hd_buf, &bmi_hd, DIB_RGB_COLORS, SRCCOPY);
+    if (cpu_hd) StretchDIBits(dc, x, y, w, h, 0, 0, W * 4, H * 4, hd_buf, &bmi_hd, DIB_RGB_COLORS, SRCCOPY);
     else StretchDIBits(dc, x, y, w, h, 0, 0, W, H, fb, &bmi_fb, DIB_RGB_COLORS, SRCCOPY);
     int *rects[2] = { menu_rect, status_rect };
     for (int k = 0; k < 2; k++) if (rects[k][2] > 0) BitBlt(dc, rects[k][0], rects[k][1], rects[k][2], rects[k][3], back_dc, rects[k][0], rects[k][1], SRCCOPY);
@@ -767,9 +782,12 @@ static void build_menu(void)
         static const wchar_t *scn[3] = { L"по размеру окна", L"целочисленный", L"растянуть" };
         wcscpy(m_title, L"Экран и графика");
         add(L"Формат кадра", wsn[C.ws_mode]);
-        add(L"HD-графика (сглаживание ×4)", onoff(C.hd));
+        static const wchar_t *fxn[FX_COUNT] = { L"чёткие пиксели", L"сглаживание пиксель-арта", L"ЭЛТ-телевизор", L"ЭЛТ-телевизор, выпуклый" };
+        static const wchar_t *fxn_cpu[FX_COUNT] = { L"чёткие пиксели", L"сглаживание ×4 (процессор)", L"ЭЛТ (нужен OpenGL 2.0)", L"ЭЛТ (нужен OpenGL 2.0)" };
+        add(L"Фильтр изображения", fx_ok ? fxn[C.fx_mode] : fxn_cpu[C.fx_mode]);
         add(L"Масштаб", scn[C.scale_mode]);
-        add(L"Фильтр при масштабировании", onoff(C.smooth));
+        add(L"Размытие при масштабировании", onoff(C.smooth));
+        add(L"Смешивать дизеринг (как на ТВ)", fx_ok ? onoff(C.fx_dither) : L"нужен OpenGL 2.0");
         add(L"Полный экран", onoff(fullscreen));
         add(L"Вертикальная синхронизация", onoff(C.vsync));
         add(L"Вывод изображения", C.use_gl ? (gl_ok ? L"OpenGL" : L"OpenGL (недоступен, GDI)") : L"GDI (после перезапуска)");
@@ -894,13 +912,14 @@ static void menu_act(int dir)
         int d = dir ? dir : 1;
         switch (i) {
         case 0: C.ws_mode = (C.ws_mode + 3 + d) % 3; apply_video(); fit_window(); break;
-        case 1: C.hd = !C.hd; break;
+        case 1: C.fx_mode = (C.fx_mode + FX_COUNT + d) % FX_COUNT; C.hd = C.fx_mode == FX_SMOOTH; break;
         case 2: C.scale_mode = (C.scale_mode + 3 + d) % 3; break;
         case 3: C.smooth = !C.smooth; break;
-        case 4: toggle_fullscreen(); break;
-        case 5: C.vsync = !C.vsync; break;
-        case 6: C.use_gl = !C.use_gl; set_status(L"вступит в силу после перезапуска"); break;
-        case 7: if (!dir) { m_page = M_MAIN; m_sel = 5; } break;
+        case 4: C.fx_dither = !C.fx_dither; break;
+        case 5: toggle_fullscreen(); break;
+        case 6: C.vsync = !C.vsync; break;
+        case 7: C.use_gl = !C.use_gl; set_status(L"вступит в силу после перезапуска"); break;
+        case 8: if (!dir) { m_page = M_MAIN; m_sel = 5; } break;
         }
     } else if (m_page == M_SPEED) {
         int d = dir ? dir : 1;
@@ -1152,8 +1171,8 @@ static int load_rom_file(const wchar_t *path, int quiet)
 static const char *settings_info(void)
 {
     static char b[200];
-    _snprintf(b, 199, "ws %d hd %d gl %d vsync %d full %d scale %d smooth %d rewind %d battle x%d hd-threads %d rom-kind %d",
-              C.ws_mode, C.hd, gl_ok, C.vsync, fullscreen, C.scale_mode, C.smooth, C.rewind, C.battle_speed, hd_threads, rom_kind_loaded);
+    _snprintf(b, 199, "ws %d fx %d/%d gl %d vsync %d full %d scale %d smooth %d rewind %d battle x%d hd-threads %d rom-kind %d",
+              C.ws_mode, C.fx_mode, fx_ok, gl_ok, C.vsync, fullscreen, C.scale_mode, C.smooth, C.rewind, C.battle_speed, hd_threads, rom_kind_loaded);
     b[199] = 0;
     return b;
 }
@@ -1165,9 +1184,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.8");
+    diag_init(exe_dir, "0.9");
     diag_info = settings_info;
-    logw("start, version 0.8");
+    logw("start, version 0.9");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
@@ -1207,6 +1226,10 @@ static int run(void)
     diag_set_window(hwnd);
     video_init();
     gl_ok = C.use_gl && gl_init();
+    if (gl_ok) {
+        fx_ok = glfx_init(gl_getproc);
+        logw("shaders %s", fx_ok ? "ok" : glfx_error());
+    }
     logw("window ok, opengl %d (%s), hd threads %d", gl_ok, gl_ok ? (const char *)glGetString(GL_VERSION) : "-", hd_threads);
 
     int argc = 0; LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
