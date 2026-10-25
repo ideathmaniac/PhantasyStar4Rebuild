@@ -33,8 +33,10 @@ static int snap_valid, snap_wa, snap_ha, snap_wb, snap_hb, snap_maskb;
 static int cam_x, cam_y;                /* world position of screen (0,0) this frame */
 static int battle, battle_mirror;       /* this frame is a battle; its background is one screen wide */
 int ps4_field_live;                     /* last frame showed the field map unobstructed */
+static int ps4_field_live_any;          /* the field, maybe under windows */
 int g_ws_probe;                         /* run the field check even at 4:3 */
 int g_ws_battle = 1;                    /* widen battles too */
+int g_ws_cutscene;                      /* last frame was neither the field nor a battle (story pictures, title) */
 
 static inline uint16_t ramw(uint32_t a) { a &= 0xFFFF; return (uint16_t)((g_ram[a] << 8) | g_ram[a + 1]); }
 
@@ -95,10 +97,20 @@ static int battle_begin(void)
     return 1;
 }
 
+static int ws_classify(void);
 static int ws_begin(void)
 {
+    int r = ws_classify();
+    g_ws_cutscene = !battle && !r && !ps4_field_live_any;
+    return r;
+}
+static int ws_classify(void)
+{
     battle = 0;
-    if (g_ws_ext && g_ws_battle && ((g_ram[0xEF00] << 8) | g_ram[0xEF01]) == 0x14 && (V.reg[12] & 1)) {
+    ps4_field_live_any = 0;
+    int in_battle = ((g_ram[0xEF00] << 8) | g_ram[0xEF01]) == 0x14;
+    if (in_battle && (!g_ws_ext || !g_ws_battle)) { battle = 1; ps4_field_live = 0; return 0; }
+    if (g_ws_ext && g_ws_battle && in_battle && (V.reg[12] & 1)) {
         ps4_field_live = 0;
         battle = 1;
         return battle_begin();
@@ -114,12 +126,13 @@ static int ws_begin(void)
     int wa = g_ram[0xEC64] + 1, ha = g_ram[0xEC65] + 1, wb = g_ram[0xEC66] + 1, hb = g_ram[0xEC67] + 1;
     int maskb = g_ram[0xEC4F] ? 0x1FFF : 0xBFFF;
     if (wa < 8 || wb < 8) return 0;
-    if (g_ws_ext == 0 && !g_ws_probe) return 0;
+    if (g_ws_ext == 0 && !g_ws_probe) { ps4_field_live_any = 1; return 0; }   /* not checked: assume the field */
     static uint16_t live_blocks[0x1000];
     for (int i = 0; i < 0x1000; i++) live_blocks[i] = ramw(0x6000 + i * 2);
     int live = verify(&g_ram[0xA000], live_blocks, wa, ha, wb, hb, maskb);
     ps4_field_live = live >= 98;
     if (live >= 98) {
+        ps4_field_live_any = 1;
         memcpy(snap_maps, &g_ram[0xA000], sizeof snap_maps);
         memcpy(snap_blocks, live_blocks, sizeof snap_blocks);
         snap_wa = wa; snap_ha = ha; snap_wb = wb; snap_hb = hb; snap_maskb = maskb;
@@ -128,7 +141,9 @@ static int ws_begin(void)
     }
     if (!snap_valid) return 0;
     /* windows/dialogs over the field: keep painting from the snapshot */
-    return verify(snap_maps, snap_blocks, snap_wa, snap_ha, snap_wb, snap_hb, snap_maskb) >= 40;
+    int ok = verify(snap_maps, snap_blocks, snap_wa, snap_ha, snap_wb, snap_hb, snap_maskb) >= 40;
+    if (g_ws_ext == 0) { ps4_field_live_any = ok; return 0; }   /* probing only */
+    return ok;
 }
 
 /* a plane B pixel at screen position (sx, line), with the VDP's scrolling */

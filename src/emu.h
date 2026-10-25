@@ -38,7 +38,11 @@ void emu_set_widescreen_battles(int on);   /* battles too (background mirrored a
 int  emu_in_battle(void);     /* Phantasy Star IV top-level mode $FFEF00 == $14 */
 int  emu_on_field(void);
 int  emu_game_mode(void);
-void emu_set_audio_tone(int level);  /* 0 clean, 1 softer, 2 like an old TV */     /* $FFEC20 */
+void emu_set_audio_tone(int level);
+int  emu_game_mode_top(void);         /* $FFEF00: $0C field, $14 battle */
+uint32_t emu_meseta(void);            /* money, $FFF438 */
+void emu_set_cutscene_detect(int on); /* run the field check every frame, also at 4:3 */
+int  emu_is_cutscene(void);           /* last frame: neither the field nor a battle (story pictures, title) */  /* 0 clean, 1 softer, 2 like an old TV */     /* $FFEC20 */
 uint32_t emu_cpu_pc(void);   /* last 68000 instruction started */      /* the last frame showed the walkable field map, no windows */
 
 #endif

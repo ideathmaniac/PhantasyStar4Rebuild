@@ -46,6 +46,7 @@ typedef struct {
     int32_t tone;                          /* added in 0.13: 0 clean, 1 softer, 2 old TV */
     int32_t ws_battle;                     /* added in 0.14 */
     int32_t backdrop;                      /* added in 0.15: blurred picture in the side bars */
+    int32_t cine;                          /* added in 0.16: picture-tube look for story pictures */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
@@ -56,6 +57,7 @@ typedef struct {
 #define CFG_V6_SIZE (offsetof(cfg_t, tone))
 #define CFG_V7_SIZE (offsetof(cfg_t, ws_battle))
 #define CFG_V8_SIZE (offsetof(cfg_t, backdrop))
+#define CFG_V9_SIZE (offsetof(cfg_t, cine))
 static cfg_t C;
 
 /* pad input codes */
@@ -78,7 +80,7 @@ static void cfg_defaults(void)
     C.rewind = 1; C.autosave_min = 5; C.volume = 100; C.slot = 1;
     C.pad_mode = 0; C.vsync = 1; C.use_gl = 1;
     C.fx_mode = FX_PIXELS; C.fx_dither = 1; C.renderer = 0;
-    C.hd_pack = 1; C.hd_auto = 0; C.ws_battle = 1; C.backdrop = 1;
+    C.hd_pack = 1; C.hd_auto = 0; C.ws_battle = 1; C.backdrop = 1; C.cine = 1;
     static const uint16_t k[NACT][NKEY] = {
         { VK_UP, 'W' }, { VK_DOWN, 'S' }, { VK_LEFT, 'A' }, { VK_RIGHT, 'D' },
         { 'Z', 'J' }, { 'X', 'K' }, { 'C', VK_SPACE }, { VK_RETURN, 0 },
@@ -171,12 +173,13 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
         memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
         if (n < CFG_V4_SIZE && C.hd) C.fx_mode = FX_SMOOTH;
         if (n < CFG_V5_SIZE) C.renderer = C.use_gl ? 0 : 2;
         if (n < CFG_V8_SIZE) C.ws_battle = 1;
-        if (n < sizeof C) C.backdrop = 1;
+        if (n < CFG_V9_SIZE) C.backdrop = 1;
+        if (n < sizeof C) C.cine = 1;
     }
     if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
     if (C.renderer < 0 || C.renderer > 2) C.renderer = 0;
@@ -208,6 +211,47 @@ static void sram_read(void)
     memcpy(s, b, n < sz ? n : sz);
     free(b);
 }
+/* play statistics, saves\\PS4_stats.txt */
+static struct { uint64_t play_frames, battle_frames, battles, saves, loads; } ST;
+static uint64_t session_frames;
+static void stats_path(wchar_t *p) { path_in_exe_dir(p, L"saves\\PS4_stats.txt"); }
+static void stats_load(void)
+{
+    wchar_t p[700]; stats_path(p);
+    size_t n = 0; uint8_t *b = read_file(p, &n);
+    if (!b) return;
+    char *t = realloc(b, n + 1); t[n] = 0;
+    unsigned long long v[5] = { 0, 0, 0, 0, 0 };
+    sscanf(t, "play_frames=%llu battle_frames=%llu battles=%llu saves=%llu loads=%llu", &v[0], &v[1], &v[2], &v[3], &v[4]);
+    ST.play_frames = v[0]; ST.battle_frames = v[1]; ST.battles = v[2]; ST.saves = v[3]; ST.loads = v[4];
+    free(t);
+}
+static void stats_save(void)
+{
+    saves_dir();
+    char b[300];
+    int k = _snprintf(b, 299, "play_frames=%llu battle_frames=%llu battles=%llu saves=%llu loads=%llu\n",
+                      (unsigned long long)ST.play_frames, (unsigned long long)ST.battle_frames, (unsigned long long)ST.battles,
+                      (unsigned long long)ST.saves, (unsigned long long)ST.loads);
+    wchar_t p[700]; stats_path(p);
+    if (k > 0) write_file(p, b, (size_t)k);
+}
+/* one emulated frame of play */
+static void stats_frame(void)
+{
+    static int was_battle;
+    int b = emu_in_battle();
+    ST.play_frames++; session_frames++;
+    if (b) ST.battle_frames++;
+    if (b && !was_battle) ST.battles++;
+    was_battle = b;
+}
+static void fmt_time(wchar_t *o, int n, uint64_t frames)
+{
+    uint64_t s = (uint64_t)(frames / EMU_FPS);
+    _snwprintf(o, n, L"%llu ч %02llu мин", (unsigned long long)(s / 3600), (unsigned long long)(s / 60 % 60));
+}
+
 /* save slots: a small picture and the date of each */
 typedef struct { int valid; wchar_t date[40]; uint32_t *pix; int w, h; } slot_info_t;
 static slot_info_t slot_info[10];
@@ -272,7 +316,7 @@ static int state_save(int slot, int quiet)
     emu_state_save(b);
     int ok = write_file(p, b, n);
     free(b);
-    if (ok) { thumb_write(slot); slot_refresh(slot); }
+    if (ok) { thumb_write(slot); slot_refresh(slot); if (!quiet) ST.saves++; stats_save(); }
     if (!quiet) {
         wchar_t m[100];
         if (slot == 0) _snwprintf(m, 99, ok ? L"автосохранение записано" : L"не удалось записать автосохранение");
@@ -293,7 +337,7 @@ static int state_load(int slot)
     else _snwprintf(m, 99, ok ? L"загружен слот %d" : L"слот %d пуст", slot);
     set_status(m);
     free(b);
-    if (ok) rw_clear();
+    if (ok) { rw_clear(); ST.loads++; }
     return ok;
 }
 
@@ -343,6 +387,7 @@ static void hd_io_list(const char *rel, void (*cb)(const char *, void *), void *
 static void hd_io_log(const char *m) { logw("%s", m); }
 static uint32_t hd_img[224 * 4 * 448 * 4];
 static int fx_ok_ext(void);
+static int cine_on;
 static void hd_capture_now(void);
 static void screenshot(void);
 static int hd_on(void) { return C.hd_pack && fx_ok_ext() && hd_tiles() > 0; }
@@ -831,7 +876,7 @@ static void present(void)
         if (hd_compose(hd_img, 448 * 4, &hw, &hh)) { pic = hd_img; PW = hw; PH = hh; ppitch = 448 * 4; }
     }
     if (d3d_ok) {
-        d3d_frame(pic, PW, PH, ppitch, x, y, w, h, cw, ch, C.fx_mode, C.smooth, C.fx_dither, C.backdrop);
+        d3d_frame(pic, PW, PH, ppitch, x, y, w, h, cw, ch, cine_on ? FX_CINE : C.fx_mode, C.smooth, cine_on || C.fx_dither, C.backdrop);
         int *rects[2] = { menu_rect, status_rect };
         if (cw <= back_w && ch <= back_h)
             for (int k = 0; k < 2; k++) {
@@ -859,7 +904,7 @@ static void present(void)
         glMatrixMode(GL_MODELVIEW); glLoadIdentity();
         glPixelStorei(GL_UNPACK_ALIGNMENT, 4);
         if (fx_ok) {
-            glfx_draw(pic, PW, PH, ppitch, x, y, w, h, cw, ch, C.fx_mode, C.smooth, C.fx_dither, C.backdrop);
+            glfx_draw(pic, PW, PH, ppitch, x, y, w, h, cw, ch, cine_on ? FX_CINE : C.fx_mode, C.smooth, cine_on || C.fx_dither, C.backdrop);
         } else if (cpu_hd) {
             glBindTexture(GL_TEXTURE_2D, tex_hd);
             glPixelStorei(GL_UNPACK_ROW_LENGTH, MD_W_MAX * 4);
@@ -951,7 +996,7 @@ static void fit_window(void)
 /* ======================================================================
  * Overlay menu
  * ====================================================================== */
-enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP, M_HD, M_SAVE };
+enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP, M_HD, M_SAVE, M_STATS };
 static int m_save_load;                     /* M_SAVE lists slots to load (1) or to save into (0) */
 static int m_page, m_sel, m_wait_bind = -1;   /* action index waiting for a key / pad input */
 static int m_confirm_quit;
@@ -981,6 +1026,7 @@ static void build_menu(void)
         add(L"Управление: геймпад", L"▸");
         _snwprintf(v, 79, L"%d%%", C.volume); add(L"Громкость", v);
         { static const wchar_t *tn[3] = { L"чистый", L"мягче", L"как старый телевизор" }; add(L"Звук", tn[C.tone]); }
+        add(L"Статистика", L"▸");
         add(L"Справка", L"▸");
         add(L"Новая игра (на титульный экран)", 0);
         add(m_confirm_quit ? L"Выйти? Нажмите ещё раз" : L"Выход", 0);
@@ -1008,7 +1054,22 @@ static void build_menu(void)
         }
         add(L"Широкий экран в боях", C.ws_mode ? onoff(C.ws_battle) : L"нужен формат 16:10 или 16:9");
         add(L"Поля по бокам", fx_ok ? (C.backdrop ? L"размытая картинка" : L"чёрные") : L"чёрные");
+        add(L"Заставки как на кинескопе", fx_ok ? onoff(C.cine) : L"нужен Direct3D 11 или OpenGL 2.0");
         add(L"HD-пакет графики", L"▸");
+        add(L"Назад", 0);
+        break; }
+    case M_STATS: {
+        wcscpy(m_title, L"Статистика");
+        static wchar_t a[80], b2[80], c[80], d[80], e[80];
+        fmt_time(a, 79, ST.play_frames); add(L"Время в игре (всего)", a);
+        fmt_time(b2, 79, session_frames); add(L"За этот запуск", b2);
+        { wchar_t t[40]; fmt_time(t, 39, ST.battle_frames); _snwprintf(c, 79, L"%llu, %s", (unsigned long long)ST.battles, t); }
+        add(L"Боёв (и время в боях)", c);
+        int m = emu_game_mode_top();
+        if (m == 0x0C || m == 0x14) _snwprintf(d, 79, L"%lu", (unsigned long)emu_meseta()); else wcscpy(d, L"—");
+        add(L"Месеты сейчас", d);
+        _snwprintf(e, 79, L"%llu / %llu", (unsigned long long)ST.saves, (unsigned long long)ST.loads);
+        add(L"Быстрых сохранений / загрузок", e);
         add(L"Назад", 0);
         break; }
     case M_SAVE: {
@@ -1157,7 +1218,7 @@ static void menu_act(int dir)
     int i = m_sel;
     logw("menu page %d item %d %s", m_page, i, dir ? (dir < 0 ? "left" : "right") : "select");
     if (m_page == M_MAIN) {
-        if (i != 11) m_confirm_quit = 0;
+        if (i != 12) m_confirm_quit = 0;
         switch (i) {
         case 0: if (!dir) menu_set_open(0); break;
         case 1: case 2:
@@ -1169,9 +1230,10 @@ static void menu_act(int dir)
         case 6: if (!dir) { m_page = M_PAD; m_sel = 0; } break;
         case 7: C.volume += (dir ? dir : 1) * 10; if (C.volume > 100) C.volume = dir ? 100 : 0; if (C.volume < 0) C.volume = 0; break;
         case 8: C.tone = (C.tone + 3 + (dir ? dir : 1)) % 3; emu_set_audio_tone(C.tone); break;
-        case 9: if (!dir) { m_page = M_HELP; m_sel = 0; } break;
-        case 10: if (!dir) { emu_reset(); rw_clear(); set_status(L"титульный экран: Start — «Новая игра»"); menu_set_open(0); } break;
-        case 11: if (!dir) { if (m_confirm_quit) quit = 1; else m_confirm_quit = 1; } break;
+        case 9: if (!dir) { m_page = M_STATS; m_sel = 5; } break;
+        case 10: if (!dir) { m_page = M_HELP; m_sel = 0; } break;
+        case 11: if (!dir) { emu_reset(); rw_clear(); set_status(L"титульный экран: Start — «Новая игра»"); menu_set_open(0); } break;
+        case 12: if (!dir) { if (m_confirm_quit) quit = 1; else m_confirm_quit = 1; } break;
         }
     } else if (m_page == M_VIDEO) {
         int d = dir ? dir : 1;
@@ -1186,8 +1248,9 @@ static void menu_act(int dir)
         case 7: C.renderer = (C.renderer + 3 + d) % 3; C.use_gl = C.renderer != 2; set_status(L"вступит в силу после перезапуска"); break;
         case 8: C.ws_battle = !C.ws_battle; apply_video(); break;
         case 9: C.backdrop = !C.backdrop; break;
-        case 10: if (!dir) { m_page = M_HD; m_sel = 0; } break;
-        case 11: if (!dir) { m_page = M_MAIN; m_sel = 3; } break;
+        case 10: C.cine = !C.cine; emu_set_cutscene_detect(C.cine); break;
+        case 11: if (!dir) { m_page = M_HD; m_sel = 0; } break;
+        case 12: if (!dir) { m_page = M_MAIN; m_sel = 3; } break;
         }
     } else if (m_page == M_SPEED) {
         int d = dir ? dir : 1;
@@ -1212,7 +1275,9 @@ static void menu_act(int dir)
             set_status(L"назначения сброшены");
         } else { m_sel = m_page == M_KEYS ? 5 : 6; m_page = M_MAIN; }
     } else if (m_page == M_HELP) {
-        if (!dir) { m_page = M_MAIN; m_sel = 9; }
+        if (!dir) { m_page = M_MAIN; m_sel = 10; }
+    } else if (m_page == M_STATS) {
+        if (!dir && i == 5) { m_page = M_MAIN; m_sel = 9; }
     } else if (m_page == M_SAVE) {
         if (!dir) {
             int first = m_save_load ? 0 : 1, slot = first + i;
@@ -1233,7 +1298,7 @@ static void menu_act(int dir)
             set_status(m);
         } break;
         case 5: if (!dir) { CreateDirectoryW(hd_dir, 0); ShellExecuteW(0, L"open", hd_dir, 0, 0, 1); } break;
-        case 6: if (!dir) { m_page = M_VIDEO; m_sel = 10; } break;
+        case 6: if (!dir) { m_page = M_VIDEO; m_sel = 11; } break;
         }
     }
 }
@@ -1242,9 +1307,9 @@ static void menu_back(void)
 {
     if (m_wait_bind >= 0) { m_wait_bind = -1; return; }
     if (m_page == M_MAIN) menu_set_open(0);
-    else if (m_page == M_HD) { m_page = M_VIDEO; m_sel = 10; }
+    else if (m_page == M_HD) { m_page = M_VIDEO; m_sel = 11; }
     else { int from = m_page; m_page = M_MAIN;
-           m_sel = from == M_VIDEO ? 3 : from == M_SPEED ? 4 : from == M_KEYS ? 5 : from == M_PAD ? 6 : from == M_SAVE ? (m_save_load ? 2 : 1) : 9; }
+           m_sel = from == M_VIDEO ? 3 : from == M_SPEED ? 4 : from == M_KEYS ? 5 : from == M_PAD ? 6 : from == M_SAVE ? (m_save_load ? 2 : 1) : from == M_STATS ? 9 : 10; }
 }
 
 /* keyboard in the menu */
@@ -1364,6 +1429,16 @@ static int menu_hit(int mx, int my)
     return -1;
 }
 
+/* story pictures: switch the look after 8 frames in a row, so one-frame
+ * transitions do not flicker */
+static int cine_run;
+static void cine_update(void)
+{
+    int c = C.cine && emu_is_cutscene();
+    if (c == cine_on) { cine_run = 0; return; }
+    if (++cine_run >= 8) { cine_on = c; cine_run = 0; }
+}
+
 /* one displayed frame: 1 or more emulated frames, their sound, the picture */
 static int16_t snd[8192];
 static void game_frames(int fast)
@@ -1375,6 +1450,8 @@ static void game_frames(int fast)
     for (int i = 0; i < frames; i++) {
         emu_run_frame();
         frame_no++;
+        stats_frame();
+        cine_update();
         if (C.rewind && (frame_no & 1)) rw_push();
         int n;
         while ((n = emu_audio(snd, 4096)) > 0)
@@ -1528,9 +1605,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.15");
+    diag_init(exe_dir, "0.16");
     diag_info = settings_info;
-    logw("start, version 0.15");
+    logw("start, version 0.16");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
@@ -1602,6 +1679,8 @@ static int run(void)
     timeBeginPeriod(1);
     audio_init();
     emu_set_audio_tone(C.tone);
+    emu_set_cutscene_detect(C.cine);
+    stats_load();
     input_init();
     sram_read();
     emu_reset();
@@ -1657,7 +1736,7 @@ static int run(void)
         game_frames(fast);
 
         if (emu_sram_dirty()) sram_pending = 1;
-        if (sram_pending && frame_no % 120 == 0) { sram_write(); sram_pending = 0; }
+        if (sram_pending && frame_no % 120 == 0) { sram_write(); sram_pending = 0; stats_save(); }
         if (C.autosave_min && t - last_autosave > (uint64_t)C.autosave_min * 60000 && emu_on_field() && !emu_in_battle()) {
             state_save(0, 0);
             last_autosave = t;
@@ -1665,6 +1744,7 @@ static int run(void)
     }
     sram_write();
     if (C.autosave_min) state_save(0, 1);
+    stats_save();
     cfg_save();
     audio_close();
     DeleteFileW(marker);

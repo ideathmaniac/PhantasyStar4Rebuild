@@ -111,7 +111,7 @@ static void *tex_edge, *srv_edge, *rtv_edge;      /* FX_SMOOTH pass 1 */
 static void *tex_ovl, *srv_ovl;                   /* overlays (menu), window sized */
 static int ovl_w, ovl_h;
 static void *cbuf, *samp, *rast, *vs;
-static void *ps_dither, *ps_edge, *ps_xbr, *ps_pixels, *ps_crt, *ps_copy, *ps_back, *ps_down;
+static void *ps_dither, *ps_edge, *ps_xbr, *ps_pixels, *ps_crt, *ps_copy, *ps_back, *ps_down, *ps_cine;
 static void *tex_bd, *srv_bd, *rtv_bd;            /* the picture shrunk for the side bars */
 
 /* constant buffer, as declared in HLSL_HEAD */
@@ -248,7 +248,8 @@ static int init2(void *hwnd)
     if (!(ps_dither = compile(SH_DITHER, "dither", 0)) || !(ps_edge = compile(SH_EDGE, "edge", 0)) ||
         !(ps_xbr = compile(SH_XBR, "xbr", 0)) || !(ps_pixels = compile(SH_PIXELS, "pixels", 0)) ||
         !(ps_crt = compile(SH_CRT, "crt", 0)) || !(ps_copy = compile(SH_COPY, "copy", 0)) ||
-        !(ps_back = compile(SH_BACKDROP, "backdrop", 0)) || !(ps_down = compile(SH_DOWN, "down", 0)))
+        !(ps_back = compile(SH_BACKDROP, "backdrop", 0)) || !(ps_down = compile(SH_DOWN, "down", 0)) ||
+        !(ps_cine = compile(SH_CINE, "cine", 0)))
         return 0;
     return 1;
 }
@@ -356,6 +357,9 @@ void d3d_frame(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w,
     if (mode == FX_SMOOTH) {
         set_consts(x0, y0, x1, y1, u, v, 0, 0, W, H, sx, sy, 0);
         pass(bb_rtv, cw, ch, ps_xbr, src, srv_edge);
+    } else if (mode == FX_CINE) {
+        set_consts(x0, y0, x1, y1, u, v, 0, 0, W, H, sx, sy, 0);
+        pass(bb_rtv, cw, ch, ps_cine, src, 0);
     } else if (mode == FX_CRT || mode == FX_CRT_CURVED) {
         set_consts(x0, y0, x1, y1, u, v, 0, 0, W, H, sx, sy, mode == FX_CRT_CURVED ? 1.0f : 0.0f);
         pass(bb_rtv, cw, ch, ps_crt, src, 0);

@@ -134,6 +134,42 @@ static const char *SH_CRT = FX_COMMON
     "  return float4(sqrt(clamp(col, 0.0, 1.0)) * vig, 1.0);\n"
     "}\n";
 
+/* story pictures and the title: a gentle picture-tube look. Soft
+ * horizontal filtering, faint scanlines, glow, warmer and slightly richer
+ * colours, darker corners (gameplay keeps the filter chosen in the menu) */
+static const char *SH_CINE = FX_COMMON
+    "float3 lin(float3 c) { return c * c; }\n"
+    "float3 scanl(float x, float y) {\n"
+    "  float px = x - 0.5, i = floor(px), t = px - i;\n"
+    "  t = t * t * (3.0 - 2.0 * t);\n"
+    "  y = clamp(y, 0.0, fsize.y - 1.0);\n"
+    "  return lin(lerp(F(float2(i, y)), F(float2(i + 1.0, y)), t));\n"
+    "}\n"
+    "float4 body() {\n"
+    "  float2 n = uv * tsize / fsize;\n"
+    "  float2 p = n * fsize;\n"
+    "  float py = p.y - 0.5, y0 = floor(py), dy = py - y0;\n"
+    "  float3 a0 = scanl(p.x, y0), b0 = scanl(p.x, y0 + 1.0);\n"
+    "  float3 soft = lerp(a0, b0, dy);\n"
+    "  float w0 = exp(-dy * dy / 0.18), w1 = exp(-(1.0 - dy) * (1.0 - dy) / 0.18);\n"
+    "  float3 lines = (a0 * w0 + b0 * w1) * 1.25;\n"
+    "  float3 col = lerp(soft, lines, 0.35 * smoothstep(1.5, 3.0, scale.y));\n"
+    "  float3 glow = float3(0.0, 0.0, 0.0);\n"
+    "  for (int k = 0; k < 8; k++) {\n"
+    "    float an = float(k) * 0.785398;\n"
+    "    glow += lin(F(p - 0.5 + float2(cos(an), sin(an)) * 2.5));\n"
+    "  }\n"
+    "  col += glow / 8.0 * 0.22;\n"
+    "  col = sqrt(clamp(col, 0.0, 1.0));\n"
+    "  float l = dot(col, float3(0.299, 0.587, 0.114));\n"
+    "  col = lerp(float3(l, l, l), col, 1.1);\n"                       /* a little richer */
+    "  col = lerp(col, col * col * (3.0 - 2.0 * col), 0.25);\n"          /* gentle contrast */
+    "  col *= float3(1.03, 1.0, 0.95);\n"                                 /* warmer */
+    "  float2 c = n * 2.0 - 1.0;\n"
+    "  col *= 1.0 - 0.2 * dot(c, c) * 0.5;\n"                            /* darker corners */
+    "  return float4(clamp(col, 0.0, 1.0), 1.0);\n"
+    "}\n";
+
 /* the empty bars beside the picture: the picture shrunk (block averages,
  * extra = block size in pixels) and drawn blurred and dimmed */
 static const char *SH_DOWN = FX_COMMON

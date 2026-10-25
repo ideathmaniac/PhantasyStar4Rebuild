@@ -131,7 +131,7 @@ int main(int argc, char **argv)
             free(b);
         }
     }
-    if (getenv("WS")) { void ps4_ws_install(void); ps4_ws_install(); g_ws_ext = atoi(getenv("WS")); }
+    if (getenv("WS")) { void ps4_ws_install(void); ps4_ws_install(); g_ws_ext = atoi(getenv("WS")); extern int g_ws_probe; g_ws_probe = 1; }
     if (getenv("HD")) {
         snprintf(hd_root, sizeof hd_root, "%s", getenv("HD"));
         hd_io_t io = { hdw, hdr, hdl, hdlog };
@@ -175,6 +175,18 @@ int main(int argc, char **argv)
                 fclose(hf);
                 fprintf(stderr, "frame %ld: hd coverage %.1f%%\n", f + 1, hd_coverage() * 100);
             }
+        }
+        if (getenv("KIND_LOG")) {                    /* cutscene detection changes, with a picture of each */
+            extern int g_ws_cutscene; static int lastk = -1;
+            if (g_ws_cutscene != lastk) {
+                fprintf(stderr, "frame %ld: %s\n", f + 1, g_ws_cutscene ? "CUTSCENE" : "game");
+                lastk = g_ws_cutscene;
+                if (outdir) { char p[512]; snprintf(p, sizeof p, "%s/k%06ld_%d.ppm", outdir, f + 1, lastk); save_ppm(p); }
+            }
+        }
+        if (getenv("MODE_LOG")) {                    /* top-level game mode changes */
+            static int lastm = -1; int m = (g_ram[0xEF00] << 8) | g_ram[0xEF01];
+            if (m != lastm) { fprintf(stderr, "frame %ld: mode %02X\n", f + 1, m); lastm = m; }
         }
         if (getenv("SHOT_MODE") && outdir) {         /* save frames while the game mode is this value */
             static long last = -100000; int mode = (g_ram[0xEC20] << 8) | g_ram[0xEC21];

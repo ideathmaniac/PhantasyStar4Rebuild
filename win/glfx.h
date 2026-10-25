@@ -6,7 +6,7 @@
 #define PS4_GLFX_H
 #include <stdint.h>
 
-enum { FX_PIXELS = 0, FX_SMOOTH = 1, FX_CRT = 2, FX_CRT_CURVED = 3, FX_COUNT };
+enum { FX_PIXELS = 0, FX_SMOOTH = 1, FX_CRT = 2, FX_CRT_CURVED = 3, FX_COUNT, FX_CINE = FX_COUNT /* story pictures, not in the menu */ };
 
 typedef void *(*glfx_getproc_t)(const char *);
 

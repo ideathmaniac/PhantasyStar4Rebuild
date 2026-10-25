@@ -108,6 +108,10 @@ void emu_set_widescreen(int ext)
 }
 
 void emu_set_widescreen_battles(int on) { extern int g_ws_battle; g_ws_battle = on; }
+int emu_game_mode_top(void) { return (g_ram[0xEF00] << 8) | g_ram[0xEF01]; }
+uint32_t emu_meseta(void) { return ((uint32_t)g_ram[0xF438] << 24) | ((uint32_t)g_ram[0xF439] << 16) | ((uint32_t)g_ram[0xF43A] << 8) | g_ram[0xF43B]; }
+void emu_set_cutscene_detect(int on) { extern int g_ws_probe; if (on) g_ws_probe = 1; }   /* already on for the recompiled ROM (emu_on_field) */
+int emu_is_cutscene(void) { extern int g_ws_cutscene; return rom_kind == EMU_ROM_RECOMPILED && g_ws_cutscene; }
 int emu_in_battle(void) { return ((g_ram[0xEF00] << 8) | g_ram[0xEF01]) == 0x14; }   /* top-level game mode ($0003DC) */
 void emu_set_audio_tone(int level) { void snd_set_tone(int); snd_set_tone(level); }
 int emu_game_mode(void) { return (g_ram[0xEC20] << 8) | g_ram[0xEC21]; }

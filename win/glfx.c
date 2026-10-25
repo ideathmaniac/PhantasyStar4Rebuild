@@ -121,7 +121,7 @@ static const char *FS_TAIL = "void main() { gl_FragColor = body(); }\n";
 
 /* ---------------------------------------------------------------- setup */
 typedef struct { GLuint prog; GLint src, tsize, fsize, scale, extra, edge; } prog_t;
-static prog_t P_DITHER, P_EDGE, P_XBR, P_PIXELS, P_CRT, P_BACK, P_DOWN;
+static prog_t P_DITHER, P_EDGE, P_XBR, P_PIXELS, P_CRT, P_BACK, P_DOWN, P_CINE;
 static GLuint tex_src, tex_dith, tex_edge, fbo_dith, fbo_edge, tex_bd, fbo_bd;
 static int ready;
 
@@ -204,7 +204,7 @@ int glfx_init(glfx_getproc_t gp)
     L(pFramebufferTexture2D, "glFramebufferTexture2D"); L(pCheckFramebufferStatus, "glCheckFramebufferStatus");
 #undef L
     if (!link(&P_DITHER, SH_DITHER, "dither") || !link(&P_EDGE, SH_EDGE, "edge") || !link(&P_XBR, SH_XBR, "xbr") ||
-        !link(&P_PIXELS, SH_PIXELS, "pixels") || !link(&P_CRT, SH_CRT, "crt") || !link(&P_BACK, SH_BACKDROP, "backdrop") || !link(&P_DOWN, SH_DOWN, "down"))
+        !link(&P_PIXELS, SH_PIXELS, "pixels") || !link(&P_CRT, SH_CRT, "crt") || !link(&P_BACK, SH_BACKDROP, "backdrop") || !link(&P_DOWN, SH_DOWN, "down") || !link(&P_CINE, SH_CINE, "cine"))
         return 0;
     new_tex(&tex_src, GL_LINEAR);
     new_tex(&tex_dith, GL_LINEAR);
@@ -330,6 +330,8 @@ void glfx_draw(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w,
         glBindTexture(GL_TEXTURE_2D, tex_edge);
         pUniform1i(P_XBR.edge, 1);
         pActiveTexture(GL_TEXTURE0);
+    } else if (mode == FX_CINE) {
+        use(&P_CINE, src, W, H, sx, sy);
     } else if (mode == FX_CRT || mode == FX_CRT_CURVED) {
         use(&P_CRT, src, W, H, sx, sy);
         pUniform1f(P_CRT.extra, mode == FX_CRT_CURVED ? 1.0f : 0.0f);
