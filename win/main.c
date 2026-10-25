@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <stdarg.h>
 #include "win32.h"
 #include "../src/emu.h"
 #include "../src/md.h"
@@ -97,6 +98,43 @@ static uint64_t now_ms(void) { int64_t t; QueryPerformanceCounter(&t); return (u
 static void path_in_exe_dir(wchar_t *out, const wchar_t *name) { wcscpy(out, exe_dir); wcscat(out, name); }
 static void set_status(const wchar_t *msg) { wcscpy(status_msg, msg); status_until = now_ms() + 2500; }
 
+/* log.txt next to the exe: what happened, for bug reports */
+static FILE *logf;
+static void logw(const char *fmt, ...)
+{
+    if (!logf) { wchar_t p[700]; wcscpy(p, exe_dir); wcscat(p, L"log.txt"); logf = _wfopen(p, L"w"); }
+    if (!logf) return;
+    va_list a; va_start(a, fmt);
+    char b[512]; _vsnprintf(b, sizeof b - 1, fmt, a); b[sizeof b - 1] = 0;
+    va_end(a);
+    fprintf(logf, "[%lu] %s\n", (unsigned long)(frame_no), b);
+    fflush(logf);
+}
+
+/* crash.txt: exception code and where it happened */
+static LONG crash_filter(EXCEPTION_POINTERS *ep)
+{
+    wchar_t p[700]; wcscpy(p, exe_dir); wcscat(p, L"crash.txt");
+    FILE *f = _wfopen(p, L"w");
+    uintptr_t base = (uintptr_t)GetModuleHandleW(0);
+    uintptr_t addr = (uintptr_t)ep->ExceptionRecord->ExceptionAddress;
+    extern uint32_t cpu_cur_pc;
+    if (f) {
+        fprintf(f, "PS4 recomp crash\ncode %08lX\naddress exe+%llX\n", (unsigned long)ep->ExceptionRecord->ExceptionCode,
+                (unsigned long long)(addr - base));
+        if (ep->ExceptionRecord->NumberParameters >= 2)
+            fprintf(f, "access %s %llX\n", ep->ExceptionRecord->ExceptionInformation[0] ? "write" : "read",
+                    (unsigned long long)ep->ExceptionRecord->ExceptionInformation[1]);
+        fprintf(f, "68000 pc %06X  frame %lu\n", cpu_cur_pc, (unsigned long)frame_no);
+        fclose(f);
+    }
+    if (logf) { fprintf(logf, "CRASH code %08lX at exe+%llX, 68k pc %06X\n", (unsigned long)ep->ExceptionRecord->ExceptionCode,
+                        (unsigned long long)(addr - base), cpu_cur_pc); fflush(logf); }
+    MessageBoxW(0, L"Программа аварийно завершилась. Отчёт записан в crash.txt рядом с PS4.exe — пришлите его, пожалуйста.",
+                L"Phantasy Star IV", MB_OK | MB_ICONERROR);
+    return 1;   /* EXCEPTION_EXECUTE_HANDLER: terminate */
+}
+
 static uint8_t *read_file(const wchar_t *path, size_t *n)
 {
     FILE *f = _wfopen(path, L"rb");
@@ -184,10 +222,12 @@ static int state_save(int slot, int quiet)
 }
 static int state_load(int slot)
 {
+    logw("state_load slot %d", slot);
     wchar_t p[700]; state_path(p, slot);
     size_t n = 0; uint8_t *b = read_file(p, &n);
     wchar_t m[100];
     int ok = b && emu_state_load(b, n);
+    logw("state_load: file %s, %lu bytes, loaded %d", b ? "found" : "missing", (unsigned long)n, ok);
     if (slot == 0) wcscpy(m, ok ? L"загружено автосохранение" : L"автосохранения нет");
     else _snwprintf(m, 99, ok ? L"загружен слот %d" : L"слот %d пуст", slot);
     set_status(m);
@@ -1061,6 +1101,7 @@ static int load_rom_file(const wchar_t *path, int quiet)
     if (!b) { if (!quiet) MessageBoxW(hwnd, L"Не удалось прочитать файл ROM.", L"Ошибка", MB_OK | MB_ICONERROR); return 0; }
     int kind = emu_load_rom(b, n);
     free(b);
+    logw("rom %lu bytes, kind %d", (unsigned long)n, kind);
     if (kind == EMU_ROM_BAD) {
         if (!quiet) MessageBoxW(hwnd, L"Это не похоже на ROM Mega Drive.", L"Ошибка", MB_OK | MB_ICONERROR);
         return 0;
@@ -1084,6 +1125,12 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
+    SetUnhandledExceptionFilter(crash_filter);
+    logw("start, version 0.4");
+    /* a "running" marker that only a clean exit removes */
+    wchar_t marker[700]; path_in_exe_dir(marker, L"running.flag");
+    int crashed_before = GetFileAttributesW(marker) != 0xFFFFFFFF;
+    { FILE *mf = _wfopen(marker, L"w"); if (mf) fclose(mf); }
 
     HINSTANCE inst = GetModuleHandleW(0);
     WNDCLASSEXW wc; memset(&wc, 0, sizeof wc);
@@ -1094,6 +1141,11 @@ static int run(void)
     RegisterClassExW(&wc);
 
     cfg_load();
+    if (crashed_before && MessageBoxW(0, L"Прошлый запуск завершился аварийно.\n\nСбросить настройки (графика, управление, полный экран)? "
+                                       L"Сохранения игры не затрагиваются.", L"Phantasy Star IV", MB_YESNO | MB_ICONINFORMATION) == IDYES) {
+        cfg_defaults();
+        logw("settings reset after a crash");
+    }
     int first_run = C.win_w == 0;
     int Wt = 320 + 2 * ws_ext_for_mode[C.ws_mode];
     RECT r = { 0, 0, (LONG)(Wt * 3 * (4.0 / 3.0 * 224.0 / 320.0) + 0.5), 224 * 3 };
@@ -1104,6 +1156,7 @@ static int run(void)
     if (!hwnd) return 1;
     video_init();
     gl_ok = C.use_gl && gl_init();
+    logw("window ok, opengl %d (%s), hd threads %d", gl_ok, gl_ok ? (const char *)glGetString(GL_VERSION) : "-", hd_threads);
 
     int argc = 0; LPWSTR *argv = CommandLineToArgvW(GetCommandLineW(), &argc);
     int loaded = 0;
@@ -1208,6 +1261,8 @@ static int run(void)
     if (C.autosave_min) state_save(0, 1);
     cfg_save();
     audio_close();
+    DeleteFileW(marker);
+    logw("clean exit");
     timeEndPeriod(1);
     DestroyWindow(hwnd);
     return 0;

@@ -20,3 +20,6 @@ GetActiveProcessorCount
 WideCharToMultiByte
 MultiByteToWideChar
 MoveFileExW
+SetUnhandledExceptionFilter
+DeleteFileW
+GetFileAttributesW

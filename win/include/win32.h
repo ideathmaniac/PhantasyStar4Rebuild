@@ -66,7 +66,17 @@ typedef struct {
 } PIXELFORMATDESCRIPTOR;
 typedef void *HGLRC;
 
+typedef struct _EXCEPTION_RECORD {
+    DWORD ExceptionCode, ExceptionFlags; struct _EXCEPTION_RECORD *ExceptionRecord; void *ExceptionAddress;
+    DWORD NumberParameters; ULONG_PTR ExceptionInformation[15];
+} EXCEPTION_RECORD;
+typedef struct { EXCEPTION_RECORD *ExceptionRecord; void *ContextRecord; } EXCEPTION_POINTERS;
+typedef LONG (*TOP_LEVEL_EXCEPTION_FILTER)(EXCEPTION_POINTERS *);
+
 /* kernel32 */
+TOP_LEVEL_EXCEPTION_FILTER SetUnhandledExceptionFilter(TOP_LEVEL_EXCEPTION_FILTER);
+BOOL DeleteFileW(LPCWSTR);
+DWORD GetFileAttributesW(LPCWSTR);
 HANDLE CreateThread(void *, size_t, LPTHREAD_START_ROUTINE, void *, DWORD, DWORD *);
 HANDLE CreateEventW(void *, BOOL, BOOL, LPCWSTR);
 BOOL SetEvent(HANDLE);
@@ -216,6 +226,8 @@ LPWSTR *CommandLineToArgvW(LPCWSTR, int *);
 #define HWND_TOP ((HWND)0)
 #define MONITOR_DEFAULTTONEAREST 2
 #define MB_OK 0
+#define MB_YESNO 4
+#define IDYES 6
 #define MB_ICONERROR 0x10
 #define MB_ICONINFORMATION 0x40
 #define IDC_ARROW ((LPCWSTR)(uintptr_t)32512)
