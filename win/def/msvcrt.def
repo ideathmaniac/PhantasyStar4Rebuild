@@ -49,3 +49,4 @@ strncmp
 strchr
 _strdup
 abs
+exp

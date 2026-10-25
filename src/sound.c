@@ -4,6 +4,8 @@
 #include "md.h"
 #include "z80.h"
 #include "sound.h"
+#include "resample.h"
+#include <math.h>
 
 int g_snd_enabled = 1;
 int g_snd_mask;
@@ -12,8 +14,15 @@ static uint32_t z80_bank;              /* 9-bit bank, address bits 15-23 */
 static int z80_cyc_debt;               /* Z80 cycles owed (fractional per line) */
 static int z80_irq_line;               /* IRQ held for the current line */
 static uint32_t ym_frac;               /* YM samples per line accumulator (x 1000) */
-static int32_t rs_pos;                 /* resampler phase, 16.16 */
-static int16_t last_l, last_r;
+static resampler_t RS;                 /* 53,267 -> 48,000 Hz */
+static int rs_ready;
+static float lp_a, lp_l, lp_r;         /* optional low-pass (tone) at 48 kHz */
+void snd_set_tone(int level)
+{
+    /* 0: clean, 1: softer (8 kHz), 2: muffled like an old TV set (3.4 kHz) */
+    double fc = level == 1 ? 8000.0 : level == 2 ? 3400.0 : 0;
+    lp_a = fc > 0 ? (float)(1.0 - exp(-2.0 * 3.14159265358979 * fc / 48000.0)) : 0;
+}
 static int32_t hp_xl, hp_yl, hp_xr, hp_yr, hp_l, hp_r;
 
 #define OUTBUF 16384
@@ -50,7 +59,8 @@ void snd_reset(void)
     z80_reset(&Z);
     ym_reset();
     psg_reset();
-    z80_bank = 0; z80_cyc_debt = 0; ym_frac = 0; rs_pos = 0;
+    z80_bank = 0; z80_cyc_debt = 0; ym_frac = 0;
+    rs_init(&RS, 53693175.0 / (7 * 144), 48000.0); rs_ready = 1;
     md_ym_write = ym_from_68k;
     md_psg_write = psg_from_68k;
 }
@@ -88,18 +98,19 @@ void snd_run_line(void)
         int L = hp_l, Rr = hp_r;
         if (L > 32767) L = 32767; else if (L < -32768) L = -32768;
         if (Rr > 32767) Rr = 32767; else if (Rr < -32768) Rr = -32768;
-        /* linear resampler 53,267 -> 48,000 Hz: rs_pos is the output position
-         * between the previous input sample (0) and this one (65536) */
-        const int32_t step = (int32_t)(65536.0 * 53267.0 / 48000.0);
-        while (rs_pos < 65536) {
-            int ol = last_l + (int)(((int64_t)(L - last_l) * rs_pos) >> 16);
-            int orr = last_r + (int)(((int64_t)(Rr - last_r) * rs_pos) >> 16);
+        /* band-limited resampling to 48 kHz (src/resample.c) */
+        if (!rs_ready) { rs_init(&RS, 53693175.0 / (7 * 144), 48000.0); rs_ready = 1; }
+        float o[4];
+        int m = rs_push(&RS, (float)L, (float)Rr, o);
+        for (int k = 0; k < m; k++) {
+            float ol = o[k * 2], orr = o[k * 2 + 1];
+            if (lp_a > 0) { lp_l += lp_a * (ol - lp_l); lp_r += lp_a * (orr - lp_r); ol = lp_l; orr = lp_r; }
+            int il = (int)lrintf(ol), ir = (int)lrintf(orr);
+            if (il > 32767) il = 32767; else if (il < -32768) il = -32768;
+            if (ir > 32767) ir = 32767; else if (ir < -32768) ir = -32768;
             int nw = (out_w + 1) % OUTBUF;
-            if (nw != out_r) { outbuf[out_w * 2] = (int16_t)ol; outbuf[out_w * 2 + 1] = (int16_t)orr; out_w = nw; }
-            rs_pos += step;
+            if (nw != out_r) { outbuf[out_w * 2] = (int16_t)il; outbuf[out_w * 2 + 1] = (int16_t)ir; out_w = nw; }
         }
-        rs_pos -= 65536;
-        last_l = (int16_t)L; last_r = (int16_t)Rr;
     }
 }
 

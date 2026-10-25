@@ -16,6 +16,7 @@
 #include "glfx.h"
 #include "d3dfx.h"
 #include "../src/hdpack.h"
+#include "../src/png.h"
 
 int _fltused = 0x9875;
 
@@ -42,6 +43,7 @@ typedef struct {
     int32_t fx_mode, fx_dither;            /* added in 0.9 */
     int32_t renderer;                      /* added in 0.10: 0 Direct3D 11, 1 OpenGL, 2 GDI */
     int32_t hd_pack, hd_auto;              /* added in 0.12 */
+    int32_t tone;                          /* added in 0.13: 0 clean, 1 softer, 2 old TV */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
@@ -49,6 +51,7 @@ typedef struct {
 #define CFG_V3_SIZE (offsetof(cfg_t, fx_mode))
 #define CFG_V4_SIZE (offsetof(cfg_t, renderer))
 #define CFG_V5_SIZE (offsetof(cfg_t, hd_pack))
+#define CFG_V6_SIZE (offsetof(cfg_t, tone))
 static cfg_t C;
 
 /* pad input codes */
@@ -164,13 +167,14 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
         memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
         if (n < CFG_V4_SIZE && C.hd) C.fx_mode = FX_SMOOTH;
         if (n < CFG_V5_SIZE) C.renderer = C.use_gl ? 0 : 2;
     }
     if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
     if (C.renderer < 0 || C.renderer > 2) C.renderer = 0;
+    if (C.tone < 0 || C.tone > 2) C.tone = 0;
     else if (n >= 20 + 1200 && *(uint32_t *)b == 0x31475043u)   /* version 1 file: keep the ROM path */
         memcpy(C.rom, b + 20, 1200);
     free(b);
@@ -198,6 +202,61 @@ static void sram_read(void)
     memcpy(s, b, n < sz ? n : sz);
     free(b);
 }
+/* save slots: a small picture and the date of each */
+typedef struct { int valid; wchar_t date[40]; uint32_t *pix; int w, h; } slot_info_t;
+static slot_info_t slot_info[10];
+static void thumb_path(wchar_t *p, int slot)
+{
+    state_path(p, slot);
+    size_t L = wcslen(p);
+    if (L > 4) wcscpy(p + L - 4, L".png");
+}
+static void slot_refresh(int slot)
+{
+    slot_info_t *si = &slot_info[slot];
+    free(si->pix); memset(si, 0, sizeof *si);
+    wchar_t p[700]; state_path(p, slot);
+    WIN32_FILE_ATTRIBUTE_DATA fa;
+    if (!GetFileAttributesExW(p, 0, &fa)) return;
+    si->valid = 1;
+    FILETIME_ lt; SYSTEMTIME st;
+    if (FileTimeToLocalFileTime(&fa.ftLastWriteTime, &lt) && FileTimeToSystemTime(&lt, &st))
+        _snwprintf(si->date, 39, L"%02d.%02d.%04d %02d:%02d", st.wDay, st.wMonth, st.wYear, st.wHour, st.wMinute);
+    thumb_path(p, slot);
+    size_t n = 0; uint8_t *b = read_file(p, &n);
+    if (!b) return;
+    int w, h; const char *e;
+    uint8_t *rgba = png_decode(b, n, &w, &h, &e);
+    free(b);
+    if (!rgba) return;
+    si->pix = malloc((size_t)w * h * 4);
+    for (int i = 0; i < w * h; i++) si->pix[i] = ((uint32_t)rgba[i * 4] << 16) | ((uint32_t)rgba[i * 4 + 1] << 8) | rgba[i * 4 + 2];
+    si->w = w; si->h = h;
+    free(rgba);
+}
+static void slots_refresh(void) { for (int i = 0; i < 10; i++) slot_refresh(i); }
+static void thumb_write(int slot)
+{
+    int W, H; const uint32_t *fb = emu_framebuffer(&W, &H);
+    int tw = W / 2, th = H / 2;
+    uint8_t *t = malloc((size_t)tw * th * 4);
+    for (int y = 0; y < th; y++)
+        for (int x = 0; x < tw; x++) {
+            int acc[3] = { 0, 0, 0 };
+            for (int k = 0; k < 4; k++) {
+                uint32_t c = fb[(size_t)(y * 2 + (k >> 1)) * MD_W_MAX + x * 2 + (k & 1)];
+                acc[0] += (c >> 16) & 255; acc[1] += (c >> 8) & 255; acc[2] += c & 255;
+            }
+            uint8_t *o = t + ((size_t)y * tw + x) * 4;
+            o[0] = (uint8_t)(acc[0] / 4); o[1] = (uint8_t)(acc[1] / 4); o[2] = (uint8_t)(acc[2] / 4); o[3] = 255;
+        }
+    size_t pn; uint8_t *png = png_encode(t, tw, th, &pn);
+    free(t);
+    wchar_t p[700]; thumb_path(p, slot);
+    write_file(p, png, pn);
+    free(png);
+}
+
 static int state_save(int slot, int quiet)
 {
     saves_dir();
@@ -207,6 +266,7 @@ static int state_save(int slot, int quiet)
     emu_state_save(b);
     int ok = write_file(p, b, n);
     free(b);
+    if (ok) { thumb_write(slot); slot_refresh(slot); }
     if (!quiet) {
         wchar_t m[100];
         if (slot == 0) _snwprintf(m, 99, ok ? L"автосохранение записано" : L"не удалось записать автосохранение");
@@ -884,7 +944,8 @@ static void fit_window(void)
 /* ======================================================================
  * Overlay menu
  * ====================================================================== */
-enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP, M_HD };
+enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP, M_HD, M_SAVE };
+static int m_save_load;                     /* M_SAVE lists slots to load (1) or to save into (0) */
 static int m_page, m_sel, m_wait_bind = -1;   /* action index waiting for a key / pad input */
 static int m_confirm_quit;
 
@@ -905,15 +966,14 @@ static void build_menu(void)
     case M_MAIN:
         wcscpy(m_title, L"Пауза");
         add(L"Продолжить", 0);
-        _snwprintf(v, 79, L"%d", C.slot); add(L"Слот сохранения", v);
-        add(L"Сохранить в слот", 0);
-        add(L"Загрузить из слота", 0);
-        add(L"Загрузить автосохранение", 0);
+        add(L"Сохранить", L"▸");
+        add(L"Загрузить", L"▸");
         add(L"Экран и графика", L"▸");
         add(L"Скорость, перемотка, автосохранение", L"▸");
         add(L"Управление: клавиатура", L"▸");
         add(L"Управление: геймпад", L"▸");
         _snwprintf(v, 79, L"%d%%", C.volume); add(L"Громкость", v);
+        { static const wchar_t *tn[3] = { L"чистый", L"мягче", L"как старый телевизор" }; add(L"Звук", tn[C.tone]); }
         add(L"Справка", L"▸");
         add(L"Новая игра (на титульный экран)", 0);
         add(m_confirm_quit ? L"Выйти? Нажмите ещё раз" : L"Выход", 0);
@@ -940,6 +1000,16 @@ static void build_menu(void)
             add(L"Вывод изображения", rv);
         }
         add(L"HD-пакет графики", L"▸");
+        add(L"Назад", 0);
+        break; }
+    case M_SAVE: {
+        wcscpy(m_title, m_save_load ? L"Загрузить" : L"Сохранить");
+        for (int k = m_save_load ? 0 : 1; k <= 9; k++) {
+            wchar_t lab[40];
+            if (k == 0) wcscpy(lab, L"Автосохранение");
+            else _snwprintf(lab, 39, L"Слот %d%s", k, k == C.slot ? L"  (F5/F8)" : L"");
+            add(lab, slot_info[k].valid ? slot_info[k].date : L"пусто");
+        }
         add(L"Назад", 0);
         break; }
     case M_HD: {
@@ -1022,9 +1092,30 @@ static void draw_menu(void)
     if (ph > back_h - 20) ph = back_h - 20;
     int px = (back_w - pw) / 2, py = (back_h - ph) / 2;
     menu_rect[0] = px - 3; menu_rect[1] = py - 3; menu_rect[2] = pw + 6; menu_rect[3] = ph + 6;
-    item_h = lh; item_x0 = px; item_x1 = px + pw; item_count = 0;
+    int lw = m_page == M_SAVE ? pw * 11 / 20 : pw;   /* the save list leaves room for the picture */
+    item_h = lh; item_x0 = px; item_x1 = px + lw; item_count = 0;
     fill(px - 3, py - 3, pw + 6, ph + 6, RGBC(170, 180, 220));
     fill(px, py, pw, ph, RGBC(16, 28, 74));
+    if (m_page == M_SAVE) {
+        int slot = (m_save_load ? 0 : 1) + m_sel;
+        int ax = px + lw + font_h / 2, aw = pw - lw - font_h, ay = py + lh * 2, ah = ph - lh * 2 - font_h / 2;
+        if (slot <= 9 && slot_info[slot].pix && aw > 10 && ah > 10) {
+            slot_info_t *si = &slot_info[slot];
+            /* the picture at the console's 4:3 pixel shape, as large as fits */
+            double sc = (double)aw / (si->w * 8.0 / 7.0);
+            if (si->h * sc > ah) sc = (double)ah / si->h;
+            int dw = (int)(si->w * 8.0 / 7.0 * sc), dh = (int)(si->h * sc);
+            BITMAPINFO bi; memset(&bi, 0, sizeof bi);
+            bi.bmiHeader.biSize = sizeof bi.bmiHeader; bi.bmiHeader.biWidth = si->w; bi.bmiHeader.biHeight = -si->h;
+            bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32; bi.bmiHeader.biCompression = BI_RGB;
+            SetStretchBltMode(back_dc, HALFTONE); SetBrushOrgEx(back_dc, 0, 0, 0);
+            fill(ax + (aw - dw) / 2 - 2, ay - 2, dw + 4, dh + 4, RGBC(170, 180, 220));
+            StretchDIBits(back_dc, ax + (aw - dw) / 2, ay, dw, dh, 0, 0, si->w, si->h, si->pix, &bi, DIB_RGB_COLORS, SRCCOPY);
+        } else if (slot <= 9) {
+            const wchar_t *t = slot_info[slot].valid ? L"без картинки" : L"пусто";
+            draw_text(ax + aw / 2 - text_w(t, font_small) / 2, ay + ah / 3, t, RGBC(140, 150, 190), font_small);
+        }
+    }
     draw_text(px + font_h, py + font_h / 2, m_title, RGBC(255, 255, 255), font_big);
     int first = 0, rows = (ph - lh * 2) / lh;
     if (m_sel >= rows) first = m_sel - rows + 1;
@@ -1032,11 +1123,11 @@ static void draw_menu(void)
     for (int i = first; i < nitems && i - first < rows; i++) {
         int yy = py + lh * 2 + (i - first) * lh;
         item_y[item_count++] = yy;
-        if (i == m_sel) fill(px + font_h / 2, yy - 2, pw - font_h, lh, RGBC(60, 90, 170));
+        if (i == m_sel) fill(px + font_h / 2, yy - 2, lw - font_h, lh, RGBC(60, 90, 170));
         draw_text(px + font_h, yy, items[i].label, i == m_sel ? RGBC(255, 255, 160) : RGBC(225, 230, 255), font_small);
         if (items[i].value[0]) {
             int tw = text_w(items[i].value, font_small);
-            draw_text(px + pw - font_h - tw, yy, items[i].value, RGBC(160, 220, 255), font_small);
+            draw_text(px + lw - font_h - tw, yy, items[i].value, RGBC(160, 220, 255), font_small);
         }
     }
 }
@@ -1056,21 +1147,21 @@ static void menu_act(int dir)
     int i = m_sel;
     logw("menu page %d item %d %s", m_page, i, dir ? (dir < 0 ? "left" : "right") : "select");
     if (m_page == M_MAIN) {
-        if (i != 12) m_confirm_quit = 0;
+        if (i != 11) m_confirm_quit = 0;
         switch (i) {
         case 0: if (!dir) menu_set_open(0); break;
-        case 1: C.slot += dir ? dir : 1; if (C.slot < 1) C.slot = 9; if (C.slot > 9) C.slot = 1; break;
-        case 2: if (!dir) { state_save(C.slot, 0); menu_set_open(0); } break;
-        case 3: if (!dir) { state_load(C.slot); menu_set_open(0); } break;
-        case 4: if (!dir) { state_load(0); menu_set_open(0); } break;
-        case 5: if (!dir) { m_page = M_VIDEO; m_sel = 0; } break;
-        case 6: if (!dir) { m_page = M_SPEED; m_sel = 0; } break;
-        case 7: if (!dir) { m_page = M_KEYS; m_sel = 0; } break;
-        case 8: if (!dir) { m_page = M_PAD; m_sel = 0; } break;
-        case 9: C.volume += (dir ? dir : 1) * 10; if (C.volume > 100) C.volume = dir ? 100 : 0; if (C.volume < 0) C.volume = 0; break;
-        case 10: if (!dir) { m_page = M_HELP; m_sel = 0; } break;
-        case 11: if (!dir) { emu_reset(); rw_clear(); set_status(L"титульный экран: Start — «Новая игра»"); menu_set_open(0); } break;
-        case 12: if (!dir) { if (m_confirm_quit) quit = 1; else m_confirm_quit = 1; } break;
+        case 1: case 2:
+            if (!dir) { slots_refresh(); m_save_load = i == 2; m_page = M_SAVE; m_sel = m_save_load ? C.slot : C.slot - 1; }
+            break;
+        case 3: if (!dir) { m_page = M_VIDEO; m_sel = 0; } break;
+        case 4: if (!dir) { m_page = M_SPEED; m_sel = 0; } break;
+        case 5: if (!dir) { m_page = M_KEYS; m_sel = 0; } break;
+        case 6: if (!dir) { m_page = M_PAD; m_sel = 0; } break;
+        case 7: C.volume += (dir ? dir : 1) * 10; if (C.volume > 100) C.volume = dir ? 100 : 0; if (C.volume < 0) C.volume = 0; break;
+        case 8: C.tone = (C.tone + 3 + (dir ? dir : 1)) % 3; emu_set_audio_tone(C.tone); break;
+        case 9: if (!dir) { m_page = M_HELP; m_sel = 0; } break;
+        case 10: if (!dir) { emu_reset(); rw_clear(); set_status(L"титульный экран: Start — «Новая игра»"); menu_set_open(0); } break;
+        case 11: if (!dir) { if (m_confirm_quit) quit = 1; else m_confirm_quit = 1; } break;
         }
     } else if (m_page == M_VIDEO) {
         int d = dir ? dir : 1;
@@ -1084,7 +1175,7 @@ static void menu_act(int dir)
         case 6: C.vsync = !C.vsync; break;
         case 7: C.renderer = (C.renderer + 3 + d) % 3; C.use_gl = C.renderer != 2; set_status(L"вступит в силу после перезапуска"); break;
         case 8: if (!dir) { m_page = M_HD; m_sel = 0; } break;
-        case 9: if (!dir) { m_page = M_MAIN; m_sel = 5; } break;
+        case 9: if (!dir) { m_page = M_MAIN; m_sel = 3; } break;
         }
     } else if (m_page == M_SPEED) {
         int d = dir ? dir : 1;
@@ -1094,7 +1185,7 @@ static void menu_act(int dir)
         case 1: { int k = 0; for (int j = 0; j < 4; j++) if (ts[j] == C.turbo_speed) k = j; k = (k + 4 + d) % 4; C.turbo_speed = ts[k]; break; }
         case 2: C.rewind = !C.rewind; rw_clear(); break;
         case 3: C.autosave_min = C.autosave_min == 0 ? (d > 0 ? 5 : 15) : C.autosave_min + 5 * d; if (C.autosave_min > 15 || C.autosave_min < 0) C.autosave_min = 0; break;
-        case 4: if (!dir) { m_page = M_MAIN; m_sel = 6; } break;
+        case 4: if (!dir) { m_page = M_MAIN; m_sel = 4; } break;
         }
     } else if (m_page == M_PAD && i == NACT + 2) {
         C.pad_mode = (C.pad_mode + 3 + (dir ? dir : 1)) % 3;
@@ -1107,9 +1198,18 @@ static void menu_act(int dir)
             if (m_page == M_KEYS) { uint16_t p[NACT][NPAD]; memcpy(p, save.pad, sizeof p); cfg_t d = C; C = save; memcpy(C.keys, d.keys, sizeof C.keys); }
             else { cfg_t d = C; C = save; memcpy(C.pad, d.pad, sizeof C.pad); }
             set_status(L"назначения сброшены");
-        } else { m_sel = m_page == M_KEYS ? 7 : 8; m_page = M_MAIN; }
+        } else { m_sel = m_page == M_KEYS ? 5 : 6; m_page = M_MAIN; }
     } else if (m_page == M_HELP) {
-        if (!dir) { m_page = M_MAIN; m_sel = 10; }
+        if (!dir) { m_page = M_MAIN; m_sel = 9; }
+    } else if (m_page == M_SAVE) {
+        if (!dir) {
+            int first = m_save_load ? 0 : 1, slot = first + i;
+            if (slot > 9) { m_page = M_MAIN; m_sel = m_save_load ? 2 : 1; }
+            else if (m_save_load) {
+                if (slot_info[slot].valid && state_load(slot)) { if (slot) C.slot = slot; menu_set_open(0); }
+                else set_status(L"этот слот пуст");
+            } else { state_save(slot, 0); C.slot = slot; menu_set_open(0); }
+        }
     } else if (m_page == M_HD) {
         switch (i) {
         case 0: C.hd_pack = !C.hd_pack; break;
@@ -1131,7 +1231,8 @@ static void menu_back(void)
     if (m_wait_bind >= 0) { m_wait_bind = -1; return; }
     if (m_page == M_MAIN) menu_set_open(0);
     else if (m_page == M_HD) { m_page = M_VIDEO; m_sel = 8; }
-    else { int from = m_page; m_page = M_MAIN; m_sel = from == M_VIDEO ? 5 : from == M_SPEED ? 6 : from == M_KEYS ? 7 : from == M_PAD ? 8 : 10; }
+    else { int from = m_page; m_page = M_MAIN;
+           m_sel = from == M_VIDEO ? 3 : from == M_SPEED ? 4 : from == M_KEYS ? 5 : from == M_PAD ? 6 : from == M_SAVE ? (m_save_load ? 2 : 1) : 9; }
 }
 
 /* keyboard in the menu */
@@ -1390,9 +1491,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.12");
+    diag_init(exe_dir, "0.13");
     diag_info = settings_info;
-    logw("start, version 0.12");
+    logw("start, version 0.13");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
@@ -1463,6 +1564,7 @@ static int run(void)
     if (C.fullscreen) toggle_fullscreen();
     timeBeginPeriod(1);
     audio_init();
+    emu_set_audio_tone(C.tone);
     input_init();
     sram_read();
     emu_reset();

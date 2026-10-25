@@ -46,3 +46,6 @@ GetLastError
 FindFirstFileW
 FindNextFileW
 FindClose
+GetFileAttributesExW
+FileTimeToLocalFileTime
+FileTimeToSystemTime

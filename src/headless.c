@@ -166,6 +166,15 @@ int main(int argc, char **argv)
                 fprintf(stderr, "frame %ld: hd coverage %.1f%%\n", f + 1, hd_coverage() * 100);
             }
         }
+        if (getenv("SHOT_MODE") && outdir) {         /* save frames while the game mode is this value */
+            static long last = -100000; int mode = (g_ram[0xEC20] << 8) | g_ram[0xEC21];
+            if (mode == (int)strtol(getenv("SHOT_MODE"), 0, 16) && f - last >= 120) {
+                last = f; char p[512]; snprintf(p, sizeof p, "%s/m%06ld.ppm", outdir, f + 1); save_ppm(p);
+                if (getenv("SHOT_DUMP")) { snprintf(p, sizeof p, "%s/m%06ld.bin", outdir, f + 1); FILE *d = fopen(p, "wb");
+                    fwrite(V.vram, 1, sizeof V.vram, d); fwrite(V.cram, 2, 64, d); fwrite(V.vsram, 2, 40, d); fwrite(V.reg, 1, 32, d);
+                    fwrite(g_ram, 1, sizeof g_ram, d); fclose(d); }
+            }
+        }
         if (hd_root[0]) {
             if (getenv("HD_AUTO")) hd_auto_capture();
             const char *cl = getenv("HD_CAPTURE");

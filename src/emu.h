@@ -36,7 +36,8 @@ extern const char EMU_ROM_SHA1[];
 void emu_set_widescreen(int ext);
 int  emu_in_battle(void);     /* Phantasy Star IV game mode $FFEC20 == $14 */
 int  emu_on_field(void);
-int  emu_game_mode(void);     /* $FFEC20 */
+int  emu_game_mode(void);
+void emu_set_audio_tone(int level);  /* 0 clean, 1 softer, 2 like an old TV */     /* $FFEC20 */
 uint32_t emu_cpu_pc(void);   /* last 68000 instruction started */      /* the last frame showed the walkable field map, no windows */
 
 #endif

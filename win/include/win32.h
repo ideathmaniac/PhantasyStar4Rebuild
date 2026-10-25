@@ -140,6 +140,12 @@ typedef struct {
 HANDLE FindFirstFileW(LPCWSTR, WIN32_FIND_DATAW *);
 BOOL FindNextFileW(HANDLE, WIN32_FIND_DATAW *);
 BOOL FindClose(HANDLE);
+/* kernel32: file times */
+typedef struct { DWORD dwFileAttributes; FILETIME_ ftCreationTime, ftLastAccessTime, ftLastWriteTime; DWORD nFileSizeHigh, nFileSizeLow; } WIN32_FILE_ATTRIBUTE_DATA;
+typedef struct { WORD wYear, wMonth, wDayOfWeek, wDay, wHour, wMinute, wSecond, wMilliseconds; } SYSTEMTIME;
+BOOL GetFileAttributesExW(LPCWSTR, int, void *);
+BOOL FileTimeToLocalFileTime(const FILETIME_ *, FILETIME_ *);
+BOOL FileTimeToSystemTime(const FILETIME_ *, SYSTEMTIME *);
 /* shell32 */
 HINSTANCE ShellExecuteW(HWND, LPCWSTR, LPCWSTR, LPCWSTR, LPCWSTR, int);
 /* user32 */

@@ -108,6 +108,7 @@ void emu_set_widescreen(int ext)
 }
 
 int emu_in_battle(void) { return ((g_ram[0xEC20] << 8) | g_ram[0xEC21]) == 0x14; }
+void emu_set_audio_tone(int level) { void snd_set_tone(int); snd_set_tone(level); }
 int emu_game_mode(void) { return (g_ram[0xEC20] << 8) | g_ram[0xEC21]; }
 uint32_t emu_cpu_pc(void) { extern uint32_t cpu_cur_pc; return cpu_cur_pc; }
 int emu_on_field(void) { extern int ps4_field_live; return ps4_field_live; }

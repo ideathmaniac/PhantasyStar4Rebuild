@@ -7,4 +7,7 @@ double log(double);
 double pow(double, double);
 double sqrt(double);
 double floor(double);
+double exp(double);
+static inline double fabs(double x) { return x < 0 ? -x : x; }
+static inline long lrintf(float x) { return (long)(x < 0 ? x - 0.5f : x + 0.5f); }
 #endif
