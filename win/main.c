@@ -14,6 +14,7 @@
 #include "../src/rewind.h"
 #include "diag.h"
 #include "glfx.h"
+#include "d3dfx.h"
 
 int _fltused = 0x9875;
 
@@ -38,11 +39,13 @@ typedef struct {
     wchar_t rom[600];
     int32_t pad_mode, vsync, use_gl;       /* added in 0.3 */
     int32_t fx_mode, fx_dither;            /* added in 0.9 */
+    int32_t renderer;                      /* added in 0.10: 0 Direct3D 11, 1 OpenGL, 2 GDI */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
 #define CFG_V2_SIZE (offsetof(cfg_t, pad_mode))
 #define CFG_V3_SIZE (offsetof(cfg_t, fx_mode))
+#define CFG_V4_SIZE (offsetof(cfg_t, renderer))
 static cfg_t C;
 
 /* pad input codes */
@@ -64,7 +67,7 @@ static void cfg_defaults(void)
     C.ws_mode = 2; C.hd = 0; C.scale_mode = 0; C.smooth = 0; C.battle_speed = 1; C.turbo_speed = 3;
     C.rewind = 1; C.autosave_min = 5; C.volume = 100; C.slot = 1;
     C.pad_mode = 0; C.vsync = 1; C.use_gl = 1;
-    C.fx_mode = FX_PIXELS; C.fx_dither = 1;
+    C.fx_mode = FX_PIXELS; C.fx_dither = 1; C.renderer = 0;
     static const uint16_t k[NACT][NKEY] = {
         { VK_UP, 'W' }, { VK_DOWN, 'S' }, { VK_LEFT, 'A' }, { VK_RIGHT, 'D' },
         { 'Z', 'J' }, { 'X', 'K' }, { 'C', VK_SPACE }, { VK_RETURN, 0 },
@@ -157,11 +160,13 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
         memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
-        if (n < sizeof C && C.hd) C.fx_mode = FX_SMOOTH;
+        if (n < CFG_V4_SIZE && C.hd) C.fx_mode = FX_SMOOTH;
+        if (n < sizeof C) C.renderer = C.use_gl ? 0 : 2;
     }
     if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
+    if (C.renderer < 0 || C.renderer > 2) C.renderer = 0;
     else if (n >= 20 + 1200 && *(uint32_t *)b == 0x31475043u)   /* version 1 file: keep the ROM path */
         memcpy(C.rom, b + 20, 1200);
     free(b);
@@ -551,7 +556,7 @@ static int menu_rect[4], status_rect[4];   /* x, y, w, h of overlay boxes drawn 
 /* ---------- OpenGL path (GPU scaling, vsync) ---------- */
 static HDC gl_dc;
 static HGLRC gl_rc;
-static int gl_ok, gl_npot, fx_ok;
+static int gl_ok, gl_npot, fx_ok, d3d_ok;
 static void *gl_getproc(const char *n)
 {
     void *p = wglGetProcAddress(n);
@@ -642,6 +647,26 @@ static void present(void)
         draw_status();
     }
 
+    if (d3d_ok) {
+        d3d_frame(fb, W, H, MD_W_MAX, x, y, w, h, cw, ch, C.fx_mode, C.smooth, C.fx_dither);
+        int *rects[2] = { menu_rect, status_rect };
+        if (cw <= back_w && ch <= back_h)
+            for (int k = 0; k < 2; k++) {
+                int *r = rects[k];
+                if (r[0] < 0) { r[2] += r[0]; r[0] = 0; }
+                if (r[1] < 0) { r[3] += r[1]; r[1] = 0; }
+                if (r[0] + r[2] > back_w) r[2] = back_w - r[0];
+                if (r[1] + r[3] > back_h) r[3] = back_h - r[1];
+                if (r[2] <= 0 || r[3] <= 0) continue;
+                GdiFlush();
+                d3d_overlay((const uint32_t *)back_bits, back_w, back_h, r[0], r[1], r[2], r[3]);
+            }
+        if (!d3d_present(C.vsync)) {
+            static int told;
+            if (!told) { logw("direct3d: %s", d3d_error()); told = 1; }
+        }
+        return;
+    }
     if (gl_ok) {
         if (vsync_applied != C.vsync && wgl_swap_interval) { wgl_swap_interval(C.vsync ? 1 : 0); vsync_applied = C.vsync; }
         glViewport(0, 0, cw, ch);
@@ -790,7 +815,14 @@ static void build_menu(void)
         add(L"Смешивать дизеринг (как на ТВ)", fx_ok ? onoff(C.fx_dither) : L"нужен OpenGL 2.0");
         add(L"Полный экран", onoff(fullscreen));
         add(L"Вертикальная синхронизация", onoff(C.vsync));
-        add(L"Вывод изображения", C.use_gl ? (gl_ok ? L"OpenGL" : L"OpenGL (недоступен, GDI)") : L"GDI (после перезапуска)");
+        {
+            static const wchar_t *rn[3] = { L"Direct3D 11", L"OpenGL", L"GDI (без фильтров)" };
+            int active = d3d_ok ? 0 : gl_ok ? 1 : 2;
+            static wchar_t rv[80];
+            if (C.renderer == active) wcscpy(rv, rn[active]);
+            else _snwprintf(rv, 79, L"%s (после перезапуска)", rn[C.renderer]);
+            add(L"Вывод изображения", rv);
+        }
         add(L"Назад", 0);
         break; }
     case M_SPEED: {
@@ -918,7 +950,7 @@ static void menu_act(int dir)
         case 4: C.fx_dither = !C.fx_dither; break;
         case 5: toggle_fullscreen(); break;
         case 6: C.vsync = !C.vsync; break;
-        case 7: C.use_gl = !C.use_gl; set_status(L"вступит в силу после перезапуска"); break;
+        case 7: C.renderer = (C.renderer + 3 + d) % 3; C.use_gl = C.renderer != 2; set_status(L"вступит в силу после перезапуска"); break;
         case 8: if (!dir) { m_page = M_MAIN; m_sel = 5; } break;
         }
     } else if (m_page == M_SPEED) {
@@ -1171,8 +1203,8 @@ static int load_rom_file(const wchar_t *path, int quiet)
 static const char *settings_info(void)
 {
     static char b[200];
-    _snprintf(b, 199, "ws %d fx %d/%d gl %d vsync %d full %d scale %d smooth %d rewind %d battle x%d hd-threads %d rom-kind %d",
-              C.ws_mode, C.fx_mode, fx_ok, gl_ok, C.vsync, fullscreen, C.scale_mode, C.smooth, C.rewind, C.battle_speed, hd_threads, rom_kind_loaded);
+    _snprintf(b, 199, "ws %d fx %d/%d d3d %d gl %d vsync %d full %d scale %d smooth %d rewind %d battle x%d hd-threads %d rom-kind %d",
+              C.ws_mode, C.fx_mode, fx_ok, d3d_ok, gl_ok, C.vsync, fullscreen, C.scale_mode, C.smooth, C.rewind, C.battle_speed, hd_threads, rom_kind_loaded);
     b[199] = 0;
     return b;
 }
@@ -1184,9 +1216,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.9");
+    diag_init(exe_dir, "0.10");
     diag_info = settings_info;
-    logw("start, version 0.9");
+    logw("start, version 0.10");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
@@ -1225,7 +1257,12 @@ static int run(void)
     if (!hwnd) return 1;
     diag_set_window(hwnd);
     video_init();
-    gl_ok = C.use_gl && gl_init();
+    if (C.renderer == 0) {
+        d3d_ok = d3d_init(hwnd);
+        if (d3d_ok) { fx_ok = 1; logw("direct3d 11 ok, %s", d3d_info()); }
+        else logw("direct3d 11 failed: %s", d3d_error());
+    }
+    gl_ok = !d3d_ok && C.renderer != 2 && gl_init();
     if (gl_ok) {
         fx_ok = glfx_init(gl_getproc);
         logw("shaders %s", fx_ok ? "ok" : glfx_error());

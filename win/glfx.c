@@ -100,141 +100,24 @@ const char *glfx_error(void) { return err; }
 #define TH 256
 
 /* ---------------------------------------------------------------- shaders */
+#include "fx_shaders.h"
+
 static const char *VS =
     "varying vec2 uv;\n"
     "void main() { gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex; uv = gl_MultiTexCoord0.xy; }\n";
 
-/* common part of every fragment shader */
-#define FS_HEAD \
-    "uniform sampler2D src;\n" \
-    "uniform vec2 tsize;\n"      /* texture size in texels */ \
-    "uniform vec2 fsize;\n"      /* picture size in pixels */ \
-    "varying vec2 uv;\n" \
-    "vec3 F(vec2 p) { p = clamp(p, vec2(0.0), fsize - 1.0); return texture2D(src, (p + 0.5) / tsize).rgb; }\n"
-
-static const char *FS_DITHER = FS_HEAD
-    "float D(vec3 a, vec3 b) { vec3 d = abs(a - b); return d.r + d.g + d.b; }\n"
-    "void main() {\n"
-    "  vec2 p = floor(uv * tsize);\n"
-    "  vec3 c = F(p), l = F(p + vec2(-1.0, 0.0)), r = F(p + vec2(1.0, 0.0));\n"
-    "  vec3 l2 = F(p + vec2(-2.0, 0.0)), r2 = F(p + vec2(2.0, 0.0));\n"
-    "  vec3 o = c;\n"
-    "  if (D(l, r) < 0.01 && D(c, l) > 0.01 && D(c, l) < 0.9 && (D(c, l2) < 0.01 || D(c, r2) < 0.01)) o = mix(c, l, 0.5);\n"
-    "  gl_FragColor = vec4(o, 1.0);\n"
-    "}\n";
-
-/* pass 1 of FX_SMOOTH: per corner 0 = no edge, 0.5 = blend toward the F
- * neighbour, 1.0 = toward the H neighbour (names as in src/hdscale.c) */
-static const char *FS_EDGE = FS_HEAD
-    "vec3 Y(vec3 c) { c *= 255.0; return vec3(dot(c, vec3(0.299, 0.587, 0.114)), dot(c, vec3(-0.169, -0.331, 0.5)), dot(c, vec3(0.5, -0.419, -0.081))); }\n"
-    "float dist(vec3 a, vec3 b) { vec3 d = abs(Y(a) - Y(b)); return d.x * 48.0 + d.y * 7.0 + d.z * 6.0; }\n"
-    "vec2 rot(int k, vec2 t) {\n"
-    "  if (k == 0) return t;\n"
-    "  if (k == 1) return vec2(-t.y, t.x);\n"
-    "  if (k == 2) return -t;\n"
-    "  return vec2(t.y, -t.x);\n"
-    "}\n"
-    "float corner(vec2 p, int k) {\n"
-    "  vec3 e = F(p), f = F(p + rot(k, vec2(1.0, 0.0))), h = F(p + rot(k, vec2(0.0, 1.0)));\n"
-    "  if (f == e || h == e) return 0.0;\n"
-    "  vec3 i = F(p + rot(k, vec2(1.0, 1.0))), c = F(p + rot(k, vec2(1.0, -1.0))), g = F(p + rot(k, vec2(-1.0, 1.0)));\n"
-    "  vec3 b = F(p + rot(k, vec2(0.0, -1.0)));\n"
-    "  vec3 f4 = F(p + rot(k, vec2(2.0, 0.0))), h5 = F(p + rot(k, vec2(0.0, 2.0)));\n"
-    "  vec3 d5 = F(p + rot(k, vec2(-1.0, 2.0))), i5 = F(p + rot(k, vec2(1.0, 2.0))), i4 = F(p + rot(k, vec2(2.0, 1.0)));\n"
-    "  float wd1 = dist(e, c) + dist(e, g) + dist(i, f4) + dist(i, h5) + 4.0 * dist(h, f);\n"
-    "  float wd2 = dist(h, d5) + dist(h, i5) + dist(f, i4) + dist(f, b) + 4.0 * dist(e, i);\n"
-    "  if (wd1 >= wd2) return 0.0;\n"
-    "  return dist(e, f) <= dist(e, h) ? 0.5 : 1.0;\n"
-    "}\n"
-    "void main() {\n"
-    "  vec2 p = floor(uv * tsize);\n"
-    "  gl_FragColor = vec4(corner(p, 0), corner(p, 1), corner(p, 2), corner(p, 3));\n"
-    "}\n";
-
-/* pass 2 of FX_SMOOTH */
-static const char *FS_XBR = FS_HEAD
-    "uniform sampler2D edge;\n"
-    "vec2 rot(int k, vec2 t) {\n"
-    "  if (k == 0) return t;\n"
-    "  if (k == 1) return vec2(-t.y, t.x);\n"
-    "  if (k == 2) return -t;\n"
-    "  return vec2(t.y, -t.x);\n"
-    "}\n"
-    "vec3 apply(vec3 col, vec2 ip, vec2 f, int k, float flag, float s) {\n"
-    "  if (flag < 0.25) return col;\n"
-    "  vec3 nc = F(ip + rot(k, flag > 0.75 ? vec2(0.0, 1.0) : vec2(1.0, 0.0)));\n"
-    "  return mix(col, nc, clamp((s - 1.125) * 2.0, 0.0, 1.0));\n"
-    "}\n"
-    "void main() {\n"
-    "  vec2 p = clamp(uv * tsize, vec2(0.0), fsize - 0.001);\n"
-    "  vec2 ip = floor(p), f = p - ip;\n"
-    "  vec4 e = texture2D(edge, (ip + 0.5) / tsize);\n"
-    "  vec3 col = F(ip);\n"
-    "  col = apply(col, ip, f, 0, e.r, f.x + f.y);\n"
-    "  col = apply(col, ip, f, 1, e.g, (1.0 - f.x) + f.y);\n"
-    "  col = apply(col, ip, f, 2, e.b, 2.0 - f.x - f.y);\n"
-    "  col = apply(col, ip, f, 3, e.a, f.x + (1.0 - f.y));\n"
-    "  gl_FragColor = vec4(col, 1.0);\n"
-    "}\n";
-
-static const char *FS_PIXELS = FS_HEAD
-    "uniform vec2 scale;\n"      /* output pixels per source pixel */
-    "uniform float bilinear;\n"
-    "void main() {\n"
-    "  vec2 p = uv * tsize, q = p;\n"
-    "  if (bilinear < 0.5) {\n"
-    "    vec2 i = floor(p), t = p - i - 0.5;\n"
-    "    vec2 r = max(0.5 - 0.5 / scale, 0.0);\n"
-    "    q = i + (t - clamp(t, -r, r)) * scale + 0.5;\n"
-    "  }\n"
-    "  q = clamp(q, vec2(0.5), fsize - 0.5);\n"
-    "  gl_FragColor = vec4(texture2D(src, q / tsize).rgb, 1.0);\n"
-    "}\n";
-
-static const char *FS_CRT = FS_HEAD
-    "uniform vec2 scale;\n"
-    "uniform float curve;\n"
-    "vec3 lin(vec3 c) { return c * c; }\n"
-    "vec3 line(float x, float y) {\n"            /* one scanline, softly filtered across */
-    "  float px = x - 0.5, i = floor(px), t = px - i;\n"
-    "  t = t * t * (3.0 - 2.0 * t);\n"
-    "  y = clamp(y, 0.0, fsize.y - 1.0);\n"
-    "  return lin(mix(F(vec2(i, y)), F(vec2(i + 1.0, y)), t));\n"
-    "}\n"
-    "vec3 beam(float d, vec3 c) {\n"
-    "  vec3 s = mix(vec3(0.26), vec3(0.42), sqrt(c));\n"
-    "  return c * exp(-d * d / (2.0 * s * s)) / (s * 2.2);\n"
-    "}\n"
-    "void main() {\n"
-    "  vec2 n = uv * tsize / fsize;\n"
-    "  float edge = 1.0;\n"
-    "  if (curve > 0.5) {\n"
-    "    vec2 c = n * 2.0 - 1.0;\n"
-    "    c.x *= 1.0 + c.y * c.y * 0.035;\n"
-    "    c.y *= 1.0 + c.x * c.x * 0.05;\n"
-    "    vec2 a = abs(c);\n"
-    "    if (a.x > 1.0 || a.y > 1.0) { gl_FragColor = vec4(0.0, 0.0, 0.0, 1.0); return; }\n"
-    "    vec2 v = 1.0 - smoothstep(vec2(0.985), vec2(1.0), a);\n"
-    "    edge = v.x * v.y;\n"
-    "    n = c * 0.5 + 0.5;\n"
-    "  }\n"
-    "  vec2 p = n * fsize;\n"
-    "  float py = p.y - 0.5, y0 = floor(py), dy = py - y0;\n"
-    "  vec3 a = line(p.x, y0), b = line(p.x, y0 + 1.0);\n"
-    "  vec3 crt = beam(dy, a) + beam(1.0 - dy, b);\n"
-    "  vec3 soft = mix(a, b, dy);\n"
-    /* scanlines only where they can be drawn (enough output lines per line) */
-    "  vec3 col = mix(soft, crt, smoothstep(1.5, 3.0, scale.y));\n"
-    "  if (scale.x >= 2.5) {\n"
-    "    float m = mod(floor(gl_FragCoord.x), 3.0);\n"
-    "    vec3 mask = vec3(m < 0.5 ? 1.0 : 0.72, (m > 0.5 && m < 1.5) ? 1.0 : 0.72, m > 1.5 ? 1.0 : 0.72);\n"
-    "    col *= mask * 1.22;\n"
-    "  }\n"
-    "  vec3 glow = lin(F(p - 0.5 + vec2(-1.5, 0.0))) + lin(F(p - 0.5 + vec2(1.5, 0.0))) +\n"
-    "              lin(F(p - 0.5 + vec2(0.0, -1.5))) + lin(F(p - 0.5 + vec2(0.0, 1.5)));\n"
-    "  col += glow * 0.03;\n"
-    "  gl_FragColor = vec4(sqrt(clamp(col, 0.0, 1.0)) * edge, 1.0);\n"
-    "}\n";
+/* GLSL spelling of the shared shader dialect (win/fx_shaders.h) */
+static const char *FS_HEAD =
+    "#version 110\n"
+    "#define float2 vec2\n#define float3 vec3\n#define float4 vec4\n"
+    "#define lerp mix\n#define frac fract\n#define fmod mod\n"
+    "#define EQ3(a, b) ((a) == (b))\n"
+    "#define TEX(u) texture2D(src, (u))\n#define TEXE(u) texture2D(edge, (u))\n"
+    "#define FRAGX gl_FragCoord.x\n"
+    "uniform sampler2D src;\nuniform sampler2D edge;\n"
+    "uniform vec2 tsize;\nuniform vec2 fsize;\nuniform vec2 scale;\nuniform float extra;\n"
+    "varying vec2 uv;\n";
+static const char *FS_TAIL = "void main() { gl_FragColor = body(); }\n";
 
 /* ---------------------------------------------------------------- setup */
 typedef struct { GLuint prog; GLint src, tsize, fsize, scale, extra, edge; } prog_t;
@@ -245,7 +128,11 @@ static int ready;
 static GLuint compile(GLenum type, const char *s, const char *name)
 {
     GLuint sh = pCreateShader(type);
-    pShaderSource(sh, 1, &s, 0);
+    if (type == GL_FRAGMENT_SHADER) {
+        const char *parts[3] = { FS_HEAD, s, FS_TAIL };
+        pShaderSource(sh, 3, parts, 0);
+    } else
+        pShaderSource(sh, 1, &s, 0);
     pCompileShader(sh);
     GLint ok = 0; pGetShaderiv(sh, GL_COMPILE_STATUS, &ok);
     if (!ok) {
@@ -256,7 +143,7 @@ static GLuint compile(GLenum type, const char *s, const char *name)
     return sh;
 }
 
-static int link(prog_t *p, const char *fs, const char *name, const char *extra)
+static int link(prog_t *p, const char *fs, const char *name)
 {
     GLuint v = compile(GL_VERTEX_SHADER, VS, "vertex"), f = compile(GL_FRAGMENT_SHADER, fs, name);
     if (!v || !f) return 0;
@@ -273,7 +160,7 @@ static int link(prog_t *p, const char *fs, const char *name, const char *extra)
     p->tsize = pGetUniformLocation(p->prog, "tsize");
     p->fsize = pGetUniformLocation(p->prog, "fsize");
     p->scale = pGetUniformLocation(p->prog, "scale");
-    p->extra = extra ? pGetUniformLocation(p->prog, extra) : -1;
+    p->extra = pGetUniformLocation(p->prog, "extra");
     p->edge = pGetUniformLocation(p->prog, "edge");
     return 1;
 }
@@ -312,8 +199,8 @@ int glfx_init(glfx_getproc_t gp)
     L(pGenFramebuffers, "glGenFramebuffers"); L(pBindFramebuffer, "glBindFramebuffer");
     L(pFramebufferTexture2D, "glFramebufferTexture2D"); L(pCheckFramebufferStatus, "glCheckFramebufferStatus");
 #undef L
-    if (!link(&P_DITHER, FS_DITHER, "dither", 0) || !link(&P_EDGE, FS_EDGE, "edge", 0) || !link(&P_XBR, FS_XBR, "xbr", 0) ||
-        !link(&P_PIXELS, FS_PIXELS, "pixels", "bilinear") || !link(&P_CRT, FS_CRT, "crt", "curve"))
+    if (!link(&P_DITHER, SH_DITHER, "dither") || !link(&P_EDGE, SH_EDGE, "edge") || !link(&P_XBR, SH_XBR, "xbr") ||
+        !link(&P_PIXELS, SH_PIXELS, "pixels") || !link(&P_CRT, SH_CRT, "crt"))
         return 0;
     new_tex(&tex_src, GL_LINEAR);
     new_tex(&tex_dith, GL_LINEAR);
