@@ -1,0 +1,19 @@
+LIBRARY gdi32.dll
+EXPORTS
+StretchDIBits
+SetStretchBltMode
+SetBrushOrgEx
+GetStockObject
+CreateCompatibleDC
+CreateDIBSection
+SelectObject
+DeleteObject
+DeleteDC
+CreateFontW
+SetTextColor
+SetBkMode
+TextOutW
+GetTextExtentPoint32W
+CreateSolidBrush
+StretchBlt
+BitBlt

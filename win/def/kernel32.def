@@ -1,0 +1,22 @@
+LIBRARY kernel32.dll
+EXPORTS
+GetModuleHandleW
+GetModuleFileNameW
+GetCommandLineW
+ExitProcess
+Sleep
+QueryPerformanceCounter
+QueryPerformanceFrequency
+LoadLibraryW
+GetProcAddress
+LocalFree
+CreateDirectoryW
+CreateThread
+CreateEventW
+SetEvent
+WaitForSingleObject
+WaitForMultipleObjects
+GetActiveProcessorCount
+WideCharToMultiByte
+MultiByteToWideChar
+MoveFileExW

@@ -1,0 +1,14 @@
+# Never commit game data or anything derived from it
+rom/
+*.bin
+*.gen
+*.md.rom
+generated/
+# Build output, logs, captures
+build/
+out/
+shots*/
+tests/bin/
+*.ppm
+*.wav
+__pycache__/

@@ -1,0 +1,21 @@
+# press Start to skip the intro, then Start/C through the title and name screens
+1300 S
+1310 -
+1500 S
+1510 -
+1700 C
+1710 -
+1800 C
+1810 -
+1900 S
+1910 -
+2000 C
+2010 -
+2100 C
+2110 -
+2300 C
+2310 -
+2500 C
+2510 -
+2700 C
+2710 -
