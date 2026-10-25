@@ -31,10 +31,11 @@ extern const char EMU_ROM_SHA1[];
 
 /* Widescreen: extra pixels on each side of the 320-pixel field view
  * (0 = 4:3; 32 = 16:10; 53 = 16:9; at most 64). Only for the recompiled ROM.
- * The framebuffer is wider (emu_framebuffer's w) only on frames that show
- * the field map; battles and cutscenes stay 320 wide. */
+ * The framebuffer is wider (emu_framebuffer's w) on frames that show the
+ * field map or a battle; cutscenes stay 320 wide. */
 void emu_set_widescreen(int ext);
-int  emu_in_battle(void);     /* Phantasy Star IV game mode $FFEC20 == $14 */
+void emu_set_widescreen_battles(int on);   /* battles too (background mirrored at the sides) */
+int  emu_in_battle(void);     /* Phantasy Star IV top-level mode $FFEF00 == $14 */
 int  emu_on_field(void);
 int  emu_game_mode(void);
 void emu_set_audio_tone(int level);  /* 0 clean, 1 softer, 2 like an old TV */     /* $FFEC20 */

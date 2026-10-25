@@ -107,7 +107,8 @@ void emu_set_widescreen(int ext)
     g_ws_ext = ext < 0 ? 0 : ext > 64 ? 64 : ext;
 }
 
-int emu_in_battle(void) { return ((g_ram[0xEC20] << 8) | g_ram[0xEC21]) == 0x14; }
+void emu_set_widescreen_battles(int on) { extern int g_ws_battle; g_ws_battle = on; }
+int emu_in_battle(void) { return ((g_ram[0xEF00] << 8) | g_ram[0xEF01]) == 0x14; }   /* top-level game mode ($0003DC) */
 void emu_set_audio_tone(int level) { void snd_set_tone(int); snd_set_tone(level); }
 int emu_game_mode(void) { return (g_ram[0xEC20] << 8) | g_ram[0xEC21]; }
 uint32_t emu_cpu_pc(void) { extern uint32_t cpu_cur_pc; return cpu_cur_pc; }

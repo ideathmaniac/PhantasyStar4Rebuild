@@ -44,6 +44,7 @@ typedef struct {
     int32_t renderer;                      /* added in 0.10: 0 Direct3D 11, 1 OpenGL, 2 GDI */
     int32_t hd_pack, hd_auto;              /* added in 0.12 */
     int32_t tone;                          /* added in 0.13: 0 clean, 1 softer, 2 old TV */
+    int32_t ws_battle;                     /* added in 0.14 */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
@@ -52,6 +53,7 @@ typedef struct {
 #define CFG_V4_SIZE (offsetof(cfg_t, renderer))
 #define CFG_V5_SIZE (offsetof(cfg_t, hd_pack))
 #define CFG_V6_SIZE (offsetof(cfg_t, tone))
+#define CFG_V7_SIZE (offsetof(cfg_t, ws_battle))
 static cfg_t C;
 
 /* pad input codes */
@@ -74,7 +76,7 @@ static void cfg_defaults(void)
     C.rewind = 1; C.autosave_min = 5; C.volume = 100; C.slot = 1;
     C.pad_mode = 0; C.vsync = 1; C.use_gl = 1;
     C.fx_mode = FX_PIXELS; C.fx_dither = 1; C.renderer = 0;
-    C.hd_pack = 1; C.hd_auto = 0;
+    C.hd_pack = 1; C.hd_auto = 0; C.ws_battle = 1;
     static const uint16_t k[NACT][NKEY] = {
         { VK_UP, 'W' }, { VK_DOWN, 'S' }, { VK_LEFT, 'A' }, { VK_RIGHT, 'D' },
         { 'Z', 'J' }, { 'X', 'K' }, { 'C', VK_SPACE }, { VK_RETURN, 0 },
@@ -167,10 +169,11 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
         memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
         if (n < CFG_V4_SIZE && C.hd) C.fx_mode = FX_SMOOTH;
         if (n < CFG_V5_SIZE) C.renderer = C.use_gl ? 0 : 2;
+        if (n < sizeof C) C.ws_battle = 1;
     }
     if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
     if (C.renderer < 0 || C.renderer > 2) C.renderer = 0;
@@ -999,6 +1002,7 @@ static void build_menu(void)
             else _snwprintf(rv, 79, L"%s (после перезапуска)", rn[C.renderer]);
             add(L"Вывод изображения", rv);
         }
+        add(L"Широкий экран в боях", C.ws_mode ? onoff(C.ws_battle) : L"нужен формат 16:10 или 16:9");
         add(L"HD-пакет графики", L"▸");
         add(L"Назад", 0);
         break; }
@@ -1138,7 +1142,7 @@ static void menu_set_open(int o)
     if (!o) cfg_save();
 }
 
-static void apply_video(void) { emu_set_widescreen(ws_ext_for_mode[C.ws_mode]); }
+static void apply_video(void) { emu_set_widescreen(ws_ext_for_mode[C.ws_mode]); emu_set_widescreen_battles(C.ws_battle); }
 
 /* dir: 0 activate, -1/+1 left/right */
 static void menu_act(int dir)
@@ -1174,8 +1178,9 @@ static void menu_act(int dir)
         case 5: toggle_fullscreen(); break;
         case 6: C.vsync = !C.vsync; break;
         case 7: C.renderer = (C.renderer + 3 + d) % 3; C.use_gl = C.renderer != 2; set_status(L"вступит в силу после перезапуска"); break;
-        case 8: if (!dir) { m_page = M_HD; m_sel = 0; } break;
-        case 9: if (!dir) { m_page = M_MAIN; m_sel = 3; } break;
+        case 8: C.ws_battle = !C.ws_battle; apply_video(); break;
+        case 9: if (!dir) { m_page = M_HD; m_sel = 0; } break;
+        case 10: if (!dir) { m_page = M_MAIN; m_sel = 3; } break;
         }
     } else if (m_page == M_SPEED) {
         int d = dir ? dir : 1;
@@ -1221,7 +1226,7 @@ static void menu_act(int dir)
             set_status(m);
         } break;
         case 5: if (!dir) { CreateDirectoryW(hd_dir, 0); ShellExecuteW(0, L"open", hd_dir, 0, 0, 1); } break;
-        case 6: if (!dir) { m_page = M_VIDEO; m_sel = 8; } break;
+        case 6: if (!dir) { m_page = M_VIDEO; m_sel = 9; } break;
         }
     }
 }
@@ -1230,7 +1235,7 @@ static void menu_back(void)
 {
     if (m_wait_bind >= 0) { m_wait_bind = -1; return; }
     if (m_page == M_MAIN) menu_set_open(0);
-    else if (m_page == M_HD) { m_page = M_VIDEO; m_sel = 8; }
+    else if (m_page == M_HD) { m_page = M_VIDEO; m_sel = 9; }
     else { int from = m_page; m_page = M_MAIN;
            m_sel = from == M_VIDEO ? 3 : from == M_SPEED ? 4 : from == M_KEYS ? 5 : from == M_PAD ? 6 : from == M_SAVE ? (m_save_load ? 2 : 1) : 9; }
 }
@@ -1491,9 +1496,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.13");
+    diag_init(exe_dir, "0.14");
     diag_info = settings_info;
-    logw("start, version 0.13");
+    logw("start, version 0.14");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {

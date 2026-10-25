@@ -121,6 +121,16 @@ int main(int argc, char **argv)
 #ifdef PS4_RECOMP
     { void ps4_recomp_install(void); if (!getenv("INTERP_ONLY")) ps4_recomp_install(); }
 #endif
+    if (getenv("STATE_IN")) {                 /* start from a save state of the Windows build */
+        FILE *sf = fopen(getenv("STATE_IN"), "rb");
+        if (sf) {
+            fseek(sf, 0, SEEK_END); long n = ftell(sf); fseek(sf, 0, SEEK_SET);
+            uint8_t *b = malloc((size_t)n); fread(b, 1, (size_t)n, sf); fclose(sf);
+            int emu_state_load(const uint8_t *, size_t);
+            fprintf(stderr, "state load: %d\n", emu_state_load(b, (size_t)n));
+            free(b);
+        }
+    }
     if (getenv("WS")) { void ps4_ws_install(void); ps4_ws_install(); g_ws_ext = atoi(getenv("WS")); }
     if (getenv("HD")) {
         snprintf(hd_root, sizeof hd_root, "%s", getenv("HD"));
