@@ -24,6 +24,7 @@ int  emu_audio(int16_t *out, int max_frames);   /* 48 kHz stereo */
 size_t emu_state_size(void);
 void   emu_state_save(uint8_t *out);
 int    emu_state_load(const uint8_t *in, size_t n);
+const uint8_t *emu_state_ram(const uint8_t *st, size_t n);   /* the 64 KB work RAM inside a state, or 0 */
 
 uint8_t *emu_sram(size_t *size);
 int      emu_sram_dirty(void);                  /* returns and clears the flag */

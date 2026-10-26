@@ -97,6 +97,15 @@ void emu_state_save(uint8_t *out)
     memcpy(out + 8, &R, sizeof R);
     md_state_save(out + 8 + sizeof R);
 }
+const uint8_t *emu_state_ram(const uint8_t *in, size_t n)
+{
+    uint32_t m, sz;
+    if (n < 8) return 0;
+    memcpy(&m, in, 4); memcpy(&sz, in + 4, 4);
+    if (m != STATE_MAGIC || sz != emu_state_size() || n < sz) return 0;
+    return in + 8 + sizeof R;                    /* md_state_save starts with g_ram */
+}
+
 int emu_state_load(const uint8_t *in, size_t n)
 {
     uint32_t m, sz;
