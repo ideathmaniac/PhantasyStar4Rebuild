@@ -2,6 +2,7 @@
 #include "emu.h"
 #include "tips.h"
 #include "shop.h"
+#include "bestiary.h"
 #include "qol.h"
 #include "cpu.h"
 #include "run.h"
@@ -85,7 +86,7 @@ void emu_reset(void)
 }
 
 void emu_set_pad(int port, uint16_t b) { if (port >= 0 && port < 2) g_pad[port] = b; }
-void emu_run_frame(void) { run_frame(); if (rom_kind == EMU_ROM_RECOMPILED) qol_after_frame(); }
+void emu_run_frame(void) { run_frame(); if (rom_kind == EMU_ROM_RECOMPILED) { qol_after_frame(); bestiary_after_frame(); } }
 void emu_set_conveniences(int encounters, int exp_mult, int meseta_mult) { qol_set(encounters, exp_mult, meseta_mult); }
 const uint32_t *emu_framebuffer(int *w, int *h) { *w = g_fb_width; *h = MD_VIS_LINES; return &g_fb[0][0]; }   /* pitch MD_W_MAX */
 int emu_audio(int16_t *out, int max) { return snd_take(out, max); }
@@ -140,6 +141,8 @@ void emu_set_widescreen_battles(int on) { extern int g_ws_battle; g_ws_battle = 
 int emu_game_mode_top(void) { return (g_ram[0xEF00] << 8) | g_ram[0xEF01]; }
 uint32_t emu_meseta(void) { return ((uint32_t)g_ram[0xF438] << 24) | ((uint32_t)g_ram[0xF439] << 16) | ((uint32_t)g_ram[0xF43A] << 8) | g_ram[0xF43B]; }
 void emu_set_cutscene_detect(int on) { extern int g_ws_probe; if (on) g_ws_probe = 1; }   /* already on for the recompiled ROM (emu_on_field) */
+const uint8_t *emu_work_ram(void) { return g_ram; }
+int emu_bestiary(int id, best_info_t *b) { return rom_kind == EMU_ROM_RECOMPILED && bestiary_info(id, b); }
 int emu_shop(shop_t *s) { return rom_kind == EMU_ROM_RECOMPILED && shop_current(s); }
 int emu_skill_tip(tip_t *t) { return rom_kind == EMU_ROM_RECOMPILED && tips_current(t); }
 int emu_is_cutscene(void) { extern int g_ws_cutscene; return rom_kind == EMU_ROM_RECOMPILED && g_ws_cutscene; }

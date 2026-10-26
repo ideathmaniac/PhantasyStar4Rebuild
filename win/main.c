@@ -24,7 +24,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.27"
+#define APP_VERSION_W L"v0.28"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -254,6 +254,122 @@ static void stats_save(void)
                       (unsigned long long)ST.saves, (unsigned long long)ST.loads);
     wchar_t p[700]; stats_path(p);
     if (k > 0) write_file(p, b, (size_t)k);
+}
+/* bestiary counts: saves\PS4_bestiary.txt, "id seen defeated" per line */
+static void best_path(wchar_t *p) { path_in_exe_dir(p, L"saves\\PS4_bestiary.txt"); }
+static void best_load(void)
+{
+    wchar_t p[700]; best_path(p);
+    size_t n = 0; uint8_t *b = read_file(p, &n);
+    if (!b) return;
+    char *t = realloc(b, n + 1); t[n] = 0;
+    for (char *l = t; l && *l; ) {
+        unsigned id, se, k;
+        if (sscanf(l, "%u %u %u", &id, &se, &k) == 3) bestiary_set((int)id, se, k);
+        l = strchr(l, '\n'); if (l) l++;
+    }
+    free(t);
+}
+static void best_save(void)
+{
+    saves_dir();
+    static char b[BEST_MAX * 32]; int k = 0;
+    for (int id = 0; id < BEST_MAX; id++) {
+        uint32_t se, kd; bestiary_get(id, &se, &kd);
+        if (se || kd) k += _snprintf(b + k, sizeof b - k, "%d %u %u\n", id, se, kd);
+    }
+    wchar_t p[700]; best_path(p);
+    write_file(p, b, (size_t)k);
+}
+/* ---------- achievements: saves\\PS4_achievements.txt, "key YYYYMMDD" per line ---------- */
+typedef struct { const char *key; const wchar_t *name, *how; } ach_t;
+static const ach_t ACH[] = {
+    { "first_win",  L"Первая победа",        L"победить первого монстра" },
+    { "kills100",   L"Охотник",              L"победить 100 монстров" },
+    { "kills1000",  L"Истребитель",          L"победить 1000 монстров" },
+    { "seen100",    L"Энциклопедист",        L"встретить 100 разных монстров" },
+    { "lv10",       L"Опытный",              L"герой отряда достиг 10 уровня" },
+    { "lv30",       L"Ветеран",              L"герой отряда достиг 30 уровня" },
+    { "lv50",       L"Легенда Альгола",      L"герой отряда достиг 50 уровня" },
+    { "party5",     L"Полный отряд",         L"собрать отряд из пяти героев" },
+    { "rich",       L"Состоятельный",        L"накопить 10 000 месет" },
+    { "tycoon",     L"Магнат",               L"накопить 100 000 месет" },
+    { "hours10",    L"Долгий путь",          L"провести в игре 10 часов" },
+    { "boss_hive",  L"Подвал академии",      L"победить Улей" },
+    { "boss_jut",   L"Крепость Зио",         L"победить Джута" },
+    { "boss_minion",L"Башня Ладеа",          L"победить Приспешника тьмы (2580 ЕЖ)" },
+    { "boss_zio",   L"Конец Зио",            L"победить Зио" },
+};
+#define NACH ((int)(sizeof ACH / sizeof ACH[0]))
+static long long ach_time[NACH];      /* date as YYYYMMDD, 0 = locked */
+static wchar_t ach_toast[120]; static uint64_t ach_toast_until;
+static int ach_queue[NACH], ach_nqueue;   /* unlocked, waiting for their popup */
+static void ach_path(wchar_t *p) { path_in_exe_dir(p, L"saves\\PS4_achievements.txt"); }
+static void ach_load(void)
+{
+    wchar_t p[700]; ach_path(p);
+    size_t n = 0; uint8_t *b = read_file(p, &n);
+    if (!b) return;
+    char *t = realloc(b, n + 1); t[n] = 0;
+    for (char *l = t; l && *l; ) {
+        char key[40]; long long tm;
+        if (sscanf(l, "%39s %lld", key, &tm) == 2)
+            for (int i = 0; i < NACH; i++) if (!strcmp(key, ACH[i].key)) ach_time[i] = tm;
+        l = strchr(l, '\n'); if (l) l++;
+    }
+    free(t);
+}
+static void ach_save(void)
+{
+    saves_dir();
+    char b[NACH * 64]; int k = 0;
+    for (int i = 0; i < NACH; i++) if (ach_time[i]) k += _snprintf(b + k, sizeof b - k, "%s %lld\n", ACH[i].key, ach_time[i]);
+    wchar_t p[700]; ach_path(p);
+    write_file(p, b, (size_t)k);
+}
+static void ach_unlock(int i)
+{
+    if (ach_time[i]) return;
+    SYSTEMTIME st; GetLocalTime(&st);
+    ach_time[i] = st.wYear * 10000LL + st.wMonth * 100 + st.wDay;
+    if (ach_nqueue < NACH) ach_queue[ach_nqueue++] = i;
+    ach_save();
+}
+static int ach_index(const char *key) { for (int i = 0; i < NACH; i++) if (!strcmp(ACH[i].key, key)) return i; return -1; }
+static void ach_check(void)   /* twice a second */
+{
+    { best_info_t t; if (!emu_bestiary(9, &t)) return; }   /* known ROM only */
+    uint32_t kills = 0, kinds = 0;
+    for (int id = 0; id < BEST_MAX; id++) {
+        uint32_t se, kd; bestiary_get(id, &se, &kd);
+        kills += kd; if (se) kinds++;
+    }
+    #define ACH_IF(cond, key) do { if (cond) ach_unlock(ach_index(key)); } while (0)
+    ACH_IF(kills >= 1, "first_win"); ACH_IF(kills >= 100, "kills100"); ACH_IF(kills >= 1000, "kills1000");
+    ACH_IF(kinds >= 100, "seen100");
+    ACH_IF(ST.play_frames >= (uint64_t)(EMU_FPS * 36000), "hours10");
+    { uint32_t s, k;
+      bestiary_get(12, &s, &k); ACH_IF(k > 0, "boss_hive");
+      bestiary_get(114, &s, &k); ACH_IF(k > 0, "boss_jut");
+      bestiary_get(117, &s, &k); ACH_IF(k > 0, "boss_minion");
+      uint32_t z = 0; bestiary_get(139, &s, &k); z += k; bestiary_get(140, &s, &k); z += k; bestiary_get(152, &s, &k); z += k;
+      ACH_IF(z > 0, "boss_zio"); }
+    int m = emu_game_mode_top();
+    if (m != 0x0C && m != 0x14) return;   /* party data is only meaningful in play */
+    const uint8_t *r = emu_work_ram();
+    int n = 0, lv = 0;
+    for (int p = 0; p < 5; p++) {
+        int rec = r[0xF40A + p];
+        if (rec == 0xFF || rec > 15) break;
+        n++;
+        int l = r[0xF500 + rec * 0x80 + 8] << 8 | r[0xF500 + rec * 0x80 + 9];
+        if (l > lv && l < 100) lv = l;
+    }
+    ACH_IF(lv >= 10, "lv10"); ACH_IF(lv >= 30, "lv30"); ACH_IF(lv >= 50, "lv50");
+    ACH_IF(n >= 5, "party5");
+    uint32_t mes = emu_meseta();
+    ACH_IF(mes >= 10000 && mes < 10000000, "rich"); ACH_IF(mes >= 100000 && mes < 10000000, "tycoon");
+    #undef ACH_IF
 }
 /* one emulated frame of play */
 static void stats_frame(void)
@@ -816,9 +932,10 @@ static void fill(int x, int y, int w, int h, DWORD color)
 
 static void draw_menu(void);
 static void draw_status(void);
-static int menu_rect[4], status_rect[4], tip_rect[4];   /* x, y, w, h of overlay boxes drawn this frame */
+static int menu_rect[4], status_rect[4], tip_rect[4], ach_rect[4];   /* x, y, w, h of overlay boxes drawn this frame */
 static void draw_tip(int px, int py, int pw, int ph);
 static void draw_shop(int px, int py, int pw, int ph);
+static void draw_ach_toast(void);
 
 /* ---------- OpenGL path (GPU scaling, vsync) ---------- */
 static HDC gl_dc;
@@ -909,12 +1026,13 @@ static void present(void)
     if (cpu_hd) run_hd(fb, W, H);
 
     /* overlays are drawn with GDI into the back buffer, then copied */
-    menu_rect[2] = status_rect[2] = tip_rect[2] = 0;
+    menu_rect[2] = status_rect[2] = tip_rect[2] = ach_rect[2] = 0;
     if (launcher_open) draw_launcher(cw, ch);
     else if (!menu_open) {
         if (C.tips) draw_tip(x, y, w, h);
         if (C.shop_help && !tip_rect[2]) draw_shop(x, y, w, h);
     }
+    if (!launcher_open) draw_ach_toast();
     if (menu_open || status_msg[0]) {
         int lr[4]; memcpy(lr, menu_rect, sizeof lr);
         if (menu_open) draw_menu();
@@ -950,9 +1068,9 @@ static void present(void)
     }
     if (d3d_ok) {
         d3d_frame(pic, PW, PH, ppitch, x, y, w, h, cw, ch, cine_on ? FX_CINE : C.fx_mode, C.smooth, cine_on || C.fx_dither, C.backdrop);
-        int *rects[3] = { menu_rect, status_rect, tip_rect };
+        int *rects[4] = { menu_rect, status_rect, tip_rect, ach_rect };
         if (cw <= back_w && ch <= back_h)
-            for (int k = 0; k < 3; k++) {
+            for (int k = 0; k < 4; k++) {
                 int *r = rects[k];
                 if (r[0] < 0) { r[2] += r[0]; r[0] = 0; }
                 if (r[1] < 0) { r[3] += r[1]; r[1] = 0; }
@@ -989,8 +1107,8 @@ static void present(void)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W, H, GL_BGRA_EXT, GL_UNSIGNED_BYTE, fb);
             gl_quad(tex_frame, 512, 256, 0, 0, W, H, x, y, w, h, C.smooth);
         }
-        int *rects[3] = { menu_rect, status_rect, tip_rect };
-        for (int k = 0; k < 3; k++) {
+        int *rects[4] = { menu_rect, status_rect, tip_rect, ach_rect };
+        for (int k = 0; k < 4; k++) {
             int *r = rects[k];
             /* keep the copied box inside the back buffer */
             if (r[0] < 0) { r[2] += r[0]; r[0] = 0; }
@@ -1021,9 +1139,30 @@ static void present(void)
     if (C.smooth) SetBrushOrgEx(dc, 0, 0, 0);
     if (cpu_hd) StretchDIBits(dc, x, y, w, h, 0, 0, W * 4, H * 4, hd_buf, &bmi_hd, DIB_RGB_COLORS, SRCCOPY);
     else StretchDIBits(dc, x, y, w, h, 0, 0, W, H, fb, &bmi_fb, DIB_RGB_COLORS, SRCCOPY);
-    int *rects[3] = { menu_rect, status_rect, tip_rect };
-    for (int k = 0; k < 3; k++) if (rects[k][2] > 0) BitBlt(dc, rects[k][0], rects[k][1], rects[k][2], rects[k][3], back_dc, rects[k][0], rects[k][1], SRCCOPY);
+    int *rects[4] = { menu_rect, status_rect, tip_rect, ach_rect };
+    for (int k = 0; k < 4; k++) if (rects[k][2] > 0) BitBlt(dc, rects[k][0], rects[k][1], rects[k][2], rects[k][3], back_dc, rects[k][0], rects[k][1], SRCCOPY);
     ReleaseDC(hwnd, dc);
+}
+
+static void draw_ach_toast(void)
+{
+    if (ach_toast[0] && now_ms() > ach_toast_until) ach_toast[0] = 0;
+    if (!ach_toast[0] && ach_nqueue) {   /* the next one */
+        int i = ach_queue[0];
+        memmove(ach_queue, ach_queue + 1, sizeof ach_queue[0] * (size_t)--ach_nqueue);
+        _snwprintf(ach_toast, 119, L"Достижение: %ls — %ls", ACH[i].name, ACH[i].how);
+        ach_toast[119] = 0;
+        ach_toast_until = now_ms() + 4500;
+    }
+    if (!ach_toast[0]) return;
+    int tw = text_w(ach_toast, font_small);
+    int bh = font_h * 2, bw = tw + font_h * 2 + font_h;
+    int bx = back_w - bw - font_h / 2, by = font_h / 2;
+    fill(bx, by, bw, bh, RGBC(230, 190, 90));
+    fill(bx + 2, by + 2, bw - 4, bh - 4, RGBC(40, 30, 10));
+    draw_text(bx + font_h / 2, by + (bh - font_h) / 2, L"★", RGBC(255, 210, 90), font_big);
+    draw_text(bx + font_h * 2, by + (bh - font_h * 4 / 5) / 2, ach_toast, RGBC(255, 240, 200), font_small);
+    ach_rect[0] = bx; ach_rect[1] = by; ach_rect[2] = bw; ach_rect[3] = bh;
 }
 
 static void draw_status(void)
@@ -1192,7 +1331,8 @@ static void fit_window(void)
 /* ======================================================================
  * Overlay menu
  * ====================================================================== */
-enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP, M_HD, M_SAVE, M_STATS };
+enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP, M_HD, M_SAVE, M_STATS, M_BEST, M_ACH };
+static int m_best_page, m_best_next = -1, m_best_ids[10];   /* bestiary page shown; index of the "next page" item */
 static int m_save_load;                     /* M_SAVE lists slots to load (1) or to save into (0) */
 static int m_page, m_sel, m_wait_bind = -1;   /* action index waiting for a key / pad input */
 static int m_confirm_quit;
@@ -1266,6 +1406,49 @@ static void build_menu(void)
         add(L"Месеты сейчас", d);
         _snwprintf(e, 79, L"%llu / %llu", (unsigned long long)ST.saves, (unsigned long long)ST.loads);
         add(L"Быстрых сохранений / загрузок", e);
+        add(L"Бестиарий", L"▸");
+        { static wchar_t a2[40]; int got = 0; for (int i = 0; i < NACH; i++) got += ach_time[i] != 0;
+          _snwprintf(a2, 39, L"%d из %d  ▸", got, NACH); add(L"Достижения", a2); }
+        add(L"Назад", 0);
+        break; }
+    case M_ACH: {
+        int got = 0; for (int i = 0; i < NACH; i++) got += ach_time[i] != 0;
+        _snwprintf(m_title, 79, L"Достижения: %d из %d", got, NACH);
+        static wchar_t val[NACH][80];
+        for (int i = 0; i < NACH; i++) {
+            long long t = ach_time[i];
+            if (t) _snwprintf(val[i], 79, L"★ %02d.%02d.%04d", (int)(t % 100), (int)(t / 100 % 100), (int)(t / 10000));
+            else _snwprintf(val[i], 79, L"%ls", ACH[i].how);
+            val[i][79] = 0;
+            add(ACH[i].name, val[i]);
+        }
+        add(L"Назад", 0);
+        break; }
+    case M_BEST: {
+        /* the monsters met so far, 10 per page, in the game's order */
+        static int ids[BEST_MAX]; int n = 0, total = 0;
+        for (int id = 0; id < BEST_MAX; id++) {
+            best_info_t b;
+            if (!emu_bestiary(id, &b) || !strcmp(b.name, "Пусто")) continue;
+            total++;
+            if (b.seen) ids[n++] = id;
+        }
+        int pages = (n + 9) / 10; if (pages < 1) pages = 1;
+        if (m_best_page >= pages) m_best_page = 0;
+        _snwprintf(m_title, 79, L"Бестиарий: встречено %d из %d (стр. %d/%d)", n, total, m_best_page + 1, pages);
+        static wchar_t lab[10][48], val[10][80];
+        for (int i = 0; i < 10; i++) m_best_ids[i] = -1;
+        for (int i = 0; i < 10 && m_best_page * 10 + i < n; i++) {
+            best_info_t b; emu_bestiary(ids[m_best_page * 10 + i], &b);
+            MultiByteToWideChar(65001, 0, b.name, -1, lab[i], 48);
+            _snwprintf(val[i], 79, L"ЕЖ %d · опыт %d · %d мес · побеждено %u", b.hp, b.exp, b.meseta, b.killed);
+            m_best_ids[i] = ids[m_best_page * 10 + i];
+            val[i][79] = 0;
+            add(lab[i], val[i]);
+        }
+        if (!n) add(L"Пока никого — загляните сюда после первого боя", 0);
+        m_best_next = -1;
+        if (pages > 1) { m_best_next = nitems; add(L"Следующая страница (←/→ — листать)", L"▸"); }
         add(L"Назад", 0);
         break; }
     case M_SAVE: {
@@ -1765,7 +1948,23 @@ static void menu_act(int dir)
     } else if (m_page == M_HELP) {
         if (!dir) { m_page = M_MAIN; m_sel = 10; }
     } else if (m_page == M_STATS) {
-        if (!dir && i == 5) { m_page = M_MAIN; m_sel = 9; }
+        if (!dir && i == 5) { m_page = M_BEST; m_best_page = 0; m_sel = 0; }
+        if (!dir && i == 6) { m_page = M_ACH; m_sel = NACH; }
+        if (!dir && i == 7) { m_page = M_MAIN; m_sel = 9; }
+    } else if (m_page == M_ACH) {
+        if (!dir && i == NACH) { m_page = M_STATS; m_sel = 6; }
+    } else if (m_page == M_BEST) {
+        if (dir || i == m_best_next) { if (m_best_next < 0) return; m_best_page += dir < 0 ? -1 : 1; if (m_best_page < 0) m_best_page = 0; build_menu(); if (m_sel >= nitems) m_sel = nitems - 1; }
+        else if (!dir && i == nitems - 1) { m_page = M_STATS; m_sel = 5; }
+        else if (!dir && i < 10 && (m_best_next < 0 ? i < nitems - 1 : i < m_best_next)) {   /* details of one monster */
+            best_info_t b;
+            if (emu_bestiary(m_best_ids[i], &b)) {
+                wchar_t nm[48], t[200]; MultiByteToWideChar(65001, 0, b.name, -1, nm, 48);
+                _snwprintf(t, 199, L"%ls: атака %d, защита %d, сила %d, ментал %d, ловкость %d, меткость %d; встречено %u", nm,
+                           b.attack, b.defence, b.strength, b.mental, b.agility, b.dexterity, b.seen);
+                t[199] = 0; set_status(t);
+            }
+        }
     } else if (m_page == M_SAVE) {
         if (!dir) {
             int first = m_save_load ? 0 : 1, slot = first + i;
@@ -1796,6 +1995,8 @@ static void menu_back(void)
     if (m_wait_bind >= 0) { m_wait_bind = -1; return; }
     if (m_page == M_MAIN) menu_set_open(0);
     else if (m_page == M_HD) { m_page = M_VIDEO; m_sel = 11; }
+    else if (m_page == M_BEST) { m_page = M_STATS; m_sel = 5; }
+    else if (m_page == M_ACH) { m_page = M_STATS; m_sel = 6; }
     else { int from = m_page; m_page = M_MAIN;
            m_sel = from == M_VIDEO ? 3 : from == M_SPEED ? 4 : from == M_KEYS ? 5 : from == M_PAD ? 6 : from == M_SAVE ? (m_save_load ? 2 : 1) : from == M_STATS ? 9 : 10; }
 }
@@ -2100,9 +2301,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.27");
+    diag_init(exe_dir, "0.28");
     diag_info = settings_info;
-    logw("start, version 0.27");
+    logw("start, version 0.28");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
@@ -2177,6 +2378,8 @@ static int run(void)
     emu_set_cutscene_detect(C.cine);
     emu_set_conveniences(C.encounters, C.exp_mul, C.mes_mul);
     stats_load();
+    best_load();
+    ach_load();
     input_init();
     sram_read();
     emu_reset();
@@ -2235,6 +2438,8 @@ static int run(void)
 
         if (emu_sram_dirty()) sram_pending = 1;
         if (sram_pending && frame_no % 120 == 0) { sram_write(); sram_pending = 0; stats_save(); }
+        if (frame_no % 1800 == 0) best_save();
+        if (frame_no % 30 == 0) ach_check();
         if (C.autosave_min && t - last_autosave > (uint64_t)C.autosave_min * 60000 && emu_on_field() && !emu_in_battle()) {
             state_save(0, 0);
             last_autosave = t;
@@ -2243,6 +2448,7 @@ static int run(void)
     sram_write();
     if (C.autosave_min && !launcher_open) state_save(0, 1);   /* never over the real autosave from the launcher */
     stats_save();
+    best_save();
     cfg_save();
     audio_close();
     DeleteFileW(marker);

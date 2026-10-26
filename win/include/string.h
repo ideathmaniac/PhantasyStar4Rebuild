@@ -14,6 +14,7 @@ size_t strlen(const char *);
 char *strncpy(char *, const char *, size_t);
 size_t wcslen(const wchar_t *);
 wchar_t *wcsstr(const wchar_t *, const wchar_t *);
+char *strstr(const char *, const char *);
 wchar_t *wcscpy(wchar_t *, const wchar_t *);
 wchar_t *wcscat(wchar_t *, const wchar_t *);
 wchar_t *wcsrchr(const wchar_t *, wchar_t);

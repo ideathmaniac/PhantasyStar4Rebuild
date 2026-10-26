@@ -4,7 +4,7 @@
 #   make tests      68000 single-step test runner
 CC ?= gcc
 CFLAGS ?= -O2 -w
-CORE = src/m68k.c src/md.c src/vdp.c src/run.c src/z80.c src/ym2612.c src/psg.c src/sound.c src/ps4_ws.c src/emu.c src/png.c src/hdpack.c src/resample.c src/qol.c src/tips.c src/shop.c
+CORE = src/m68k.c src/md.c src/vdp.c src/run.c src/z80.c src/ym2612.c src/psg.c src/sound.c src/ps4_ws.c src/emu.c src/png.c src/hdpack.c src/resample.c src/qol.c src/tips.c src/shop.c src/bestiary.c
 GEN_SRC = $(wildcard generated/ps4_recomp_*.c) generated/ps4_table.c
 GEN_OBJ = $(patsubst generated/%.c,build/gen/%.o,$(GEN_SRC))
 

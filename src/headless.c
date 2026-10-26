@@ -14,6 +14,7 @@
 #include "qol.h"
 #include "tips.h"
 #include "shop.h"
+#include "bestiary.h"
 #include "md.h"
 #include <dirent.h>
 #include <sys/stat.h>
@@ -156,6 +157,7 @@ int main(int argc, char **argv)
     for (long f = 0; f < frames; f++) {
         run_frame();
         if (getenv("QOL")) qol_after_frame();
+        bestiary_after_frame();
         if (wav) { int16_t buf[4096]; int n; while ((n = snd_take(buf, 2048)) > 0) { fwrite(buf, 4, n, wav); wav_frames += n; } }
         if (log) {
             fprintf(log, "%llu c=%llu pc=%06X sr=%04X d=%08X %08X %08X %08X %08X %08X %08X %08X a=%08X %08X %08X %08X %08X %08X %08X %08X ram=%08X vram=%08X cram=%08X\n",
@@ -253,5 +255,13 @@ int main(int argc, char **argv)
     if (pcs) run_dump_interp_pcs(pcs);
     fprintf(stderr, "frames %llu  pc %06X  interpreted instructions %llu\n", (unsigned long long)g_frame, R.pc,
             (unsigned long long)g_interp_insns);
+    if (getenv("BEST_LOG")) {
+        for (int id = 0; id < BEST_MAX; id++) {
+            best_info_t b;
+            if (!bestiary_info(id, &b)) { if (getenv("BEST_ALL")) fprintf(stderr, "%3d: -\n", id); continue; }
+            if (b.seen || getenv("BEST_ALL"))
+                fprintf(stderr, "%3d %s: HP %d atk %d def %d agi %d exp %d mes %d | seen %u killed %u\n", id, b.name, b.hp, b.attack, b.defence, b.agility, b.exp, b.meseta, b.seen, b.killed);
+        }
+    }
     return 0;
 }

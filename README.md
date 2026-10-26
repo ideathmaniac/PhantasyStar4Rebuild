@@ -32,6 +32,8 @@ recompiling the game's 68000 code to C. Targets the Russian fan translation
 - Pause menu with mouse, rebinding, XInput and DirectInput gamepads, rewind,
   fast-forward, battle speed-up, autosave, save slots with pictures and dates, play
   statistics, screenshots (F12).
+- Bestiary (monsters met/defeated, stats from the game's monster table, `src/bestiary.c`)
+  and 15 achievements with popups.
 - Shop helper: the highlighted item compared with what each party member wears
   (`src/shop.c`, from the game's item table and shop routine).
 - Technique and skill descriptions shown while the game's lists are open (battle and
