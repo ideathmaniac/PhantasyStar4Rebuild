@@ -8,10 +8,16 @@
 typedef int BOOL;
 typedef unsigned char BYTE;
 typedef unsigned short WORD;
+#ifdef _WIN32
 typedef unsigned long DWORD;          /* 32-bit on Windows (LLP64) */
-typedef unsigned int UINT;
 typedef long LONG;
 typedef unsigned long ULONG;
+#else                                 /* the SDL port (port/sdl_win32.c): LP64 */
+typedef uint32_t DWORD;
+typedef int32_t LONG;
+typedef uint32_t ULONG;
+#endif
+typedef unsigned int UINT;
 typedef short SHORT;
 typedef uintptr_t WPARAM, UINT_PTR, DWORD_PTR, ULONG_PTR;
 typedef intptr_t LPARAM, LRESULT, LONG_PTR, INT_PTR;

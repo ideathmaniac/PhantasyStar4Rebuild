@@ -12,3 +12,10 @@ tests/bin/
 *.ppm
 *.wav
 __pycache__/
+# Android: SDL source and generated files (the CI workflow fetches/makes them)
+android/app/jni/SDL/
+android/app/jni/fonts.c
+android/.gradle/
+android/app/build/
+android/app/.cxx/
+android/local.properties

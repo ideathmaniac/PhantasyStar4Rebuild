@@ -1,0 +1,30 @@
+// Android build of the free (interpreter) version: SDL2 from source
+// (cloned into jni/SDL by the CI workflow or by hand, see android/README.md)
+// plus the same front end as on Windows and Linux (win/main.c over port/).
+plugins { id 'com.android.application' }
+
+android {
+    namespace 'com.ps4recomp'
+    compileSdk 34
+    defaultConfig {
+        applicationId 'com.ps4recomp.game'
+        minSdk 21
+        targetSdk 34
+        versionCode 37
+        versionName '0.37'
+        externalNativeBuild { ndkBuild { arguments 'APP_PLATFORM=android-21' } }
+        ndk { abiFilters 'arm64-v8a', 'armeabi-v7a' }
+    }
+    externalNativeBuild { ndkBuild { path 'jni/Android.mk' } }
+    sourceSets { main { java.srcDirs = ['src/main/java', 'jni/SDL/android-project/app/src/main/java'] } }
+    buildTypes {
+        release {
+            minifyEnabled false
+            signingConfig signingConfigs.debug   // installable as is; not for an app store
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+}

@@ -140,16 +140,16 @@ static void path_in_exe_dir(wchar_t *out, const wchar_t *name) { wcscpy(out, exe
 static void set_status(const wchar_t *msg) { wcscpy(status_msg, msg); status_until = now_ms() + 2500; }
 
 /* log.txt next to the exe: what happened, for bug reports */
-static FILE *logf;
+static FILE *g_logf;
 static void logw(const char *fmt, ...)
 {
-    if (!logf) { wchar_t p[700]; wcscpy(p, exe_dir); wcscat(p, L"log.txt"); logf = _wfopen(p, L"w"); }
-    if (!logf) return;
+    if (!g_logf) { wchar_t p[700]; wcscpy(p, exe_dir); wcscat(p, L"log.txt"); g_logf = _wfopen(p, L"w"); }
+    if (!g_logf) return;
     va_list a; va_start(a, fmt);
     char b[512]; _vsnprintf(b, sizeof b - 1, fmt, a); b[sizeof b - 1] = 0;
     va_end(a);
-    fprintf(logf, "[%lu] %s\n", (unsigned long)(frame_no), b);
-    fflush(logf);
+    fprintf(g_logf, "[%lu] %s\n", (unsigned long)(frame_no), b);
+    fflush(g_logf);
     char nb[200]; _snprintf(nb, 199, "[%lu] %s", (unsigned long)frame_no, b); nb[199] = 0;
     diag_note(nb);
 }
@@ -1569,7 +1569,7 @@ static void build_menu(void)
             int active = d3d_ok ? 0 : gl_ok ? 1 : 2;
             static wchar_t rv[80];
             if (C.renderer == active) wcscpy(rv, rn[active]);
-            else _snwprintf(rv, 79, L"%s (после перезапуска)", rn[C.renderer]);
+            else _snwprintf(rv, 79, L"%ls (после перезапуска)", rn[C.renderer]);
             add(L"Вывод изображения", rv);
         }
         add(L"Широкий экран в боях", C.ws_mode ? onoff(C.ws_battle) : L"нужен формат 16:10 или 16:9");
@@ -1583,7 +1583,7 @@ static void build_menu(void)
         static wchar_t a[80], b2[80], c[80], d[80], e[80];
         fmt_time(a, 79, ST.play_frames); add(L"Время в игре (всего)", a);
         fmt_time(b2, 79, session_frames); add(L"За этот запуск", b2);
-        { wchar_t t[40]; fmt_time(t, 39, ST.battle_frames); _snwprintf(c, 79, L"%llu, %s", (unsigned long long)ST.battles, t); }
+        { wchar_t t[40]; fmt_time(t, 39, ST.battle_frames); _snwprintf(c, 79, L"%llu, %ls", (unsigned long long)ST.battles, t); }
         add(L"Боёв (и время в боях)", c);
         int m = emu_game_mode_top();
         if (m == 0x0C || m == 0x14) _snwprintf(d, 79, L"%lu", (unsigned long)emu_meseta()); else wcscpy(d, L"—");
@@ -1658,7 +1658,7 @@ static void build_menu(void)
         for (int k = m_save_load ? 0 : 1; k <= 9; k++) {
             wchar_t lab[40];
             if (k == 0) wcscpy(lab, L"Автосохранение");
-            else _snwprintf(lab, 39, L"Слот %d%s", k, k == C.slot ? L"  (F5/F8)" : L"");
+            else _snwprintf(lab, 39, L"Слот %d%ls", k, k == C.slot ? L"  (F5/F8)" : L"");
             add(lab, slot_info[k].valid ? slot_info[k].date : L"пусто");
         }
         add(L"Назад", 0);
@@ -1668,7 +1668,7 @@ static void build_menu(void)
         static wchar_t v1[80], v2[80];
         if (!fx_ok) wcscpy(v1, L"нужен Direct3D 11 или OpenGL 2.0");
         else if (!hd_tiles()) wcscpy(v1, L"пакет пуст");
-        else _snwprintf(v1, 79, L"%s (плиток: %d, ×%d)", C.hd_pack ? L"вкл" : L"выкл", hd_tiles(), hd_scale());
+        else _snwprintf(v1, 79, L"%ls (плиток: %d, ×%d)", C.hd_pack ? L"вкл" : L"выкл", hd_tiles(), hd_scale());
         add(L"Использовать HD-пакет", v1);
         if (hd_on()) _snwprintf(v2, 79, L"%d%%", (int)(hd_coverage() * 100 + 0.5)); else wcscpy(v2, L"—");
         add(L"Заменено на этом экране", v2);
@@ -1905,8 +1905,8 @@ static void draw_launcher(int cw, int ch)
         for (int i = 0; i < 5; i++) { labels[n] = l_items[i]; subs[n][0] = 0; n++; }
         int ls = latest_slot();
         if (ls >= 0) {
-            if (ls == 0) _snwprintf(subs[0], 59, L"Автосохранение · %s", slot_info[ls].date);
-            else _snwprintf(subs[0], 59, L"Слот %d · %s", ls, slot_info[ls].date);
+            if (ls == 0) _snwprintf(subs[0], 59, L"Автосохранение · %ls", slot_info[ls].date);
+            else _snwprintf(subs[0], 59, L"Слот %d · %ls", ls, slot_info[ls].date);
         }
     } else {
         static wchar_t lab[11][30];
@@ -2337,7 +2337,7 @@ static void screenshot(void)
         }
     size_t n; uint8_t *png = png_encode(rgba, pw, ph, &n);
     free(rgba);
-    _snwprintf(name, 799, L"%s\\PS4_%04d%02d%02d_%02d%02d%02d.png", dir, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
+    _snwprintf(name, 799, L"%ls\\PS4_%04d%02d%02d_%02d%02d%02d.png", dir, st.wYear, st.wMonth, st.wDay, st.wHour, st.wMinute, st.wSecond);
     int ok = write_file(name, png, n);
     free(png);
     set_status(ok ? L"снимок экрана сохранён в папку screenshots" : L"не удалось сохранить снимок экрана");
