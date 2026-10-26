@@ -12,6 +12,8 @@
 #include "sound.h"
 #include "hdpack.h"
 #include "qol.h"
+#include "tips.h"
+#include "md.h"
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -186,6 +188,16 @@ int main(int argc, char **argv)
                 fprintf(stderr, "frame %ld: %s\n", f + 1, g_ws_cutscene ? "CUTSCENE" : "game");
                 lastk = g_ws_cutscene;
                 if (outdir) { char p[512]; snprintf(p, sizeof p, "%s/k%06ld_%d.ppm", outdir, f + 1, lastk); save_ppm(p); }
+            }
+        }
+        if (getenv("TIP_LOG")) {                     /* technique / skill descriptions */
+            static char last[64]; tip_t t; char key[64] = "";
+            if (tips_current(&t)) snprintf(key, sizeof key, "%d.%d", t.skill, t.id);
+            if (strcmp(key, last)) {
+                strcpy(last, key);
+                if (key[0]) fprintf(stderr, "frame %ld: %s %s | cost %d | %s | power %d | %s %s\n", f + 1, t.skill ? "skill" : "tech",
+                                    t.name, t.cost, t.target, t.power, t.desc, t.note);
+                else fprintf(stderr, "frame %ld: (no list)\n", f + 1);
             }
         }
         if (getenv("ENC_LOG")) {

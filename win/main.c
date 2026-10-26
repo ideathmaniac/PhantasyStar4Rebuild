@@ -10,6 +10,7 @@
 #include <math.h>
 #include "win32.h"
 #include "../src/emu.h"
+#include "../src/tips.h"
 #include "../src/md.h"
 #include "../src/hdscale.h"
 #include "../src/rewind.h"
@@ -22,7 +23,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.18"
+#define APP_VERSION_W L"v0.19"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -51,6 +52,7 @@ typedef struct {
     int32_t backdrop;                      /* added in 0.15: blurred picture in the side bars */
     int32_t cine;                          /* added in 0.16: picture-tube look for story pictures */
     int32_t encounters, exp_mul, mes_mul;  /* added in 0.17 */
+    int32_t tips;                          /* added in 0.19: technique descriptions */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
@@ -63,6 +65,7 @@ typedef struct {
 #define CFG_V8_SIZE (offsetof(cfg_t, backdrop))
 #define CFG_V9_SIZE (offsetof(cfg_t, cine))
 #define CFG_V10_SIZE (offsetof(cfg_t, encounters))
+#define CFG_V11_SIZE (offsetof(cfg_t, tips))
 static cfg_t C;
 
 /* pad input codes */
@@ -86,7 +89,7 @@ static void cfg_defaults(void)
     C.pad_mode = 0; C.vsync = 1; C.use_gl = 1;
     C.fx_mode = FX_PIXELS; C.fx_dither = 1; C.renderer = 0;
     C.hd_pack = 1; C.hd_auto = 0; C.ws_battle = 1; C.backdrop = 1; C.cine = 1;
-    C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1;
+    C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; C.tips = 1;
     static const uint16_t k[NACT][NKEY] = {
         { VK_UP, 'W' }, { VK_DOWN, 'S' }, { VK_LEFT, 'A' }, { VK_RIGHT, 'D' },
         { 'Z', 'J' }, { 'X', 'K' }, { 'C', VK_SPACE }, { VK_RETURN, 0 },
@@ -179,23 +182,24 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
         memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
         if (n < CFG_V4_SIZE && C.hd) C.fx_mode = FX_SMOOTH;
         if (n < CFG_V5_SIZE) C.renderer = C.use_gl ? 0 : 2;
         if (n < CFG_V8_SIZE) C.ws_battle = 1;
         if (n < CFG_V9_SIZE) C.backdrop = 1;
         if (n < CFG_V10_SIZE) C.cine = 1;
-        if (n < sizeof C) { C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; }
-    }
+        if (n < CFG_V11_SIZE) { C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; }
+        if (n < sizeof C) C.tips = 1;
+    } else if (n >= 20 + 1200 && *(uint32_t *)b == 0x31475043u)   /* version 1 file: keep the ROM path */
+        memcpy(C.rom, b + 20, 1200);
     if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
     if (C.renderer < 0 || C.renderer > 2) C.renderer = 0;
     if (C.tone < 0 || C.tone > 2) C.tone = 0;
     if (C.encounters < 0 || C.encounters > 2) C.encounters = 0;
     if (C.exp_mul < 1 || C.exp_mul > 4) C.exp_mul = 1;
     if (C.mes_mul < 1 || C.mes_mul > 4) C.mes_mul = 1;
-    else if (n >= 20 + 1200 && *(uint32_t *)b == 0x31475043u)   /* version 1 file: keep the ROM path */
-        memcpy(C.rom, b + 20, 1200);
+    C.tips = C.tips != 0;
     free(b);
 }
 
@@ -807,7 +811,8 @@ static void fill(int x, int y, int w, int h, DWORD color)
 
 static void draw_menu(void);
 static void draw_status(void);
-static int menu_rect[4], status_rect[4];   /* x, y, w, h of overlay boxes drawn this frame */
+static int menu_rect[4], status_rect[4], tip_rect[4];   /* x, y, w, h of overlay boxes drawn this frame */
+static void draw_tip(int px, int py, int pw, int ph);
 
 /* ---------- OpenGL path (GPU scaling, vsync) ---------- */
 static HDC gl_dc;
@@ -898,8 +903,9 @@ static void present(void)
     if (cpu_hd) run_hd(fb, W, H);
 
     /* overlays are drawn with GDI into the back buffer, then copied */
-    menu_rect[2] = status_rect[2] = 0;
+    menu_rect[2] = status_rect[2] = tip_rect[2] = 0;
     if (launcher_open) draw_launcher(cw, ch);
+    else if (!menu_open && C.tips) draw_tip(x, y, w, h);
     if (menu_open || status_msg[0]) {
         int lr[4]; memcpy(lr, menu_rect, sizeof lr);
         if (menu_open) draw_menu();
@@ -935,9 +941,9 @@ static void present(void)
     }
     if (d3d_ok) {
         d3d_frame(pic, PW, PH, ppitch, x, y, w, h, cw, ch, cine_on ? FX_CINE : C.fx_mode, C.smooth, cine_on || C.fx_dither, C.backdrop);
-        int *rects[2] = { menu_rect, status_rect };
+        int *rects[3] = { menu_rect, status_rect, tip_rect };
         if (cw <= back_w && ch <= back_h)
-            for (int k = 0; k < 2; k++) {
+            for (int k = 0; k < 3; k++) {
                 int *r = rects[k];
                 if (r[0] < 0) { r[2] += r[0]; r[0] = 0; }
                 if (r[1] < 0) { r[3] += r[1]; r[1] = 0; }
@@ -974,8 +980,8 @@ static void present(void)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W, H, GL_BGRA_EXT, GL_UNSIGNED_BYTE, fb);
             gl_quad(tex_frame, 512, 256, 0, 0, W, H, x, y, w, h, C.smooth);
         }
-        int *rects[2] = { menu_rect, status_rect };
-        for (int k = 0; k < 2; k++) {
+        int *rects[3] = { menu_rect, status_rect, tip_rect };
+        for (int k = 0; k < 3; k++) {
             int *r = rects[k];
             /* keep the copied box inside the back buffer */
             if (r[0] < 0) { r[2] += r[0]; r[0] = 0; }
@@ -1006,8 +1012,8 @@ static void present(void)
     if (C.smooth) SetBrushOrgEx(dc, 0, 0, 0);
     if (cpu_hd) StretchDIBits(dc, x, y, w, h, 0, 0, W * 4, H * 4, hd_buf, &bmi_hd, DIB_RGB_COLORS, SRCCOPY);
     else StretchDIBits(dc, x, y, w, h, 0, 0, W, H, fb, &bmi_fb, DIB_RGB_COLORS, SRCCOPY);
-    int *rects[2] = { menu_rect, status_rect };
-    for (int k = 0; k < 2; k++) if (rects[k][2] > 0) BitBlt(dc, rects[k][0], rects[k][1], rects[k][2], rects[k][3], back_dc, rects[k][0], rects[k][1], SRCCOPY);
+    int *rects[3] = { menu_rect, status_rect, tip_rect };
+    for (int k = 0; k < 3; k++) if (rects[k][2] > 0) BitBlt(dc, rects[k][0], rects[k][1], rects[k][2], rects[k][3], back_dc, rects[k][0], rects[k][1], SRCCOPY);
     ReleaseDC(hwnd, dc);
 }
 
@@ -1020,6 +1026,52 @@ static void draw_status(void)
     fill(bx, by, bw, bh, RGBC(16, 28, 74));
     draw_text(bx + font_h / 2, by + (bh - font_h) / 2, status_msg, RGBC(255, 230, 120), font_small);
     status_rect[0] = bx; status_rect[1] = by; status_rect[2] = bw; status_rect[3] = bh;
+}
+
+/* technique / skill description while the game shows such a list: at the
+ * top of the picture in battle (the list is low there), at the bottom on
+ * the field (the menus are at the top) */
+static void draw_tip(int px, int py, int pw, int ph)
+{
+    static tip_t shown, seen; static int have, seeing; static uint64_t since;
+    tip_t t;
+    if (!emu_skill_tip(&t)) { have = seeing = 0; return; }
+    if (!seeing || seen.skill != t.skill || seen.id != t.id) { seen = t; seeing = 1; since = now_ms(); }
+    if (now_ms() - since >= 50) { shown = seen; have = 1; }   /* skip one-frame flicker while the cursor moves */
+    if (!have) return;
+    wchar_t name[40], desc[200], note[160], line3[200], tg[60], cost[40];
+    MultiByteToWideChar(65001, 0, shown.name, -1, name, 40);
+    MultiByteToWideChar(65001, 0, shown.desc, -1, desc, 200);
+    MultiByteToWideChar(65001, 0, shown.note, -1, note, 160);
+    MultiByteToWideChar(65001, 0, shown.target, -1, tg, 60);
+    if (shown.cost >= 0) _snwprintf(cost, 39, L"%d ЕТ", shown.cost); else wcscpy(cost, L"навык");
+    line3[0] = 0;
+    if (tg[0]) _snwprintf(line3, 199, L"Цель: %ls", tg);
+    if (shown.power) {
+        wchar_t st[8]; int k;
+        for (k = 0; k < 5; k++) st[k] = k < shown.power ? L'●' : L'○';
+        st[5] = 0;
+        size_t l = wcslen(line3);
+        _snwprintf(line3 + l, 199 - l, L"%lsМощность: %ls", l ? L"     " : L"", st);
+    }
+    int lh = font_h * 6 / 5, pad = font_h / 2;
+    int lines = 2 + (line3[0] != 0) + (note[0] != 0);
+    int bw = pw * 9 / 10, bh = lines * lh + pad * 2;
+    int need = text_w(desc, font_small) + pad * 2;
+    if (note[0] && text_w(note, font_small) + pad * 2 > need) need = text_w(note, font_small) + pad * 2;
+    if (need > bw) bw = need < pw ? need : pw;
+    int bx = px + (pw - bw) / 2;
+    int by = emu_in_battle() ? py + ph / 40 : py + ph - bh - ph / 40;
+    fill(bx, by, bw, bh, RGBC(200, 205, 220));
+    fill(bx + 2, by + 2, bw - 4, bh - 4, RGBC(10, 30, 96));
+    int ty = by + pad;
+    draw_text(bx + pad, ty, name, RGBC(255, 230, 120), font_big);
+    draw_text(bx + bw - pad - text_w(cost, font_small), ty + (font_h - font_h * 4 / 5) / 2, cost, RGBC(170, 200, 255), font_small);
+    ty += lh;
+    draw_text(bx + pad, ty, desc, RGBC(255, 255, 255), font_small); ty += lh;
+    if (line3[0]) { draw_text(bx + pad, ty, line3, RGBC(170, 200, 255), font_small); ty += lh; }
+    if (note[0]) draw_text(bx + pad, ty, note, RGBC(170, 200, 255), font_small);
+    tip_rect[0] = bx; tip_rect[1] = by; tip_rect[2] = bw; tip_rect[3] = bh;
 }
 
 static void toggle_fullscreen(void)
@@ -1166,6 +1218,7 @@ static void build_menu(void)
         { static const wchar_t *en[3] = { L"как в оригинале", L"реже (в 2–3 раза)", L"нет (сюжетные остаются)" }; add(L"Случайные бои", en[C.encounters]); }
         _snwprintf(v, 79, L"×%d", C.exp_mul); add(L"Опыт за бои", v);
         { wchar_t v2[20]; _snwprintf(v2, 19, L"×%d", C.mes_mul); add(L"Месеты за бои", v2); }
+        add(L"Описания техник и навыков", onoff(C.tips));
         add(L"Назад", 0);
         break; }
     case M_KEYS:
@@ -1605,7 +1658,8 @@ static void menu_act(int dir)
         case 4: C.encounters = (C.encounters + 3 + d) % 3; break;
         case 5: C.exp_mul = (C.exp_mul - 1 + 4 + d) % 4 + 1; break;
         case 6: C.mes_mul = (C.mes_mul - 1 + 4 + d) % 4 + 1; break;
-        case 7: if (!dir) { m_page = M_MAIN; m_sel = 4; } break;
+        case 7: C.tips = !C.tips; break;
+        case 8: if (!dir) { m_page = M_MAIN; m_sel = 4; } break;
         }
         emu_set_conveniences(C.encounters, C.exp_mul, C.mes_mul);
     } else if (m_page == M_PAD && i == NACT + 2) {
@@ -1958,9 +2012,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.18");
+    diag_init(exe_dir, "0.19");
     diag_info = settings_info;
-    logw("start, version 0.18");
+    logw("start, version 0.19");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
