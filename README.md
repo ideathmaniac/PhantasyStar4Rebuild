@@ -52,7 +52,13 @@ python3 tools/recomp.py rom/ps4_rus.bin out/codemap.json generated
 make                                  # Linux headless runner (lockstep tests)
 ./build_win.sh                        # PS4.exe for Windows (clang + lld-link, no SDK)
 FREE=1 ./build_win.sh                 # the same without game code (interpreter only)
+./build_linux.sh                      # ./PS4 for Linux / Steam Deck (SDL2 + OpenGL)
+FREE=1 ./build_linux.sh               # the same without game code
 ```
+Linux, Steam Deck and Android use the same front end as Windows (`win/main.c`)
+over a small Win32-on-SDL2 layer (`port/sdl_win32.c`). The free Android APK and
+Linux program are built by GitHub Actions (`.github/workflows/builds.yml`); see
+`android/README.md` and `port/README_linux.txt`.
 Tests: `make tests` (68000 vectors), `tests/z80_run.c`, `tests/emu_test.c`, `tests/rw_test.c`.
 
 ## Layout
@@ -60,6 +66,9 @@ Tests: `make tests` (68000 vectors), `tests/z80_run.c`, `tests/emu_test.c`, `tes
 src/        CPU interpreter, runtime, Mega Drive model, sound, widescreen, HD, rewind
 tools/      tracer, recompiler, disassembler, helpers
 win/        Windows front end, minimal libc/Win32 headers, import .def files
+port/       the Win32 subset over SDL2 (Linux, Steam Deck, Android)
+android/    Android project (Gradle, ndk-build)
+third_party/ SDL2 headers, stb_truetype, DejaVu fonts (with their licences)
 tests/      test runners and input scripts
 hints.json  extra entry points and recompiler patches
 ```
