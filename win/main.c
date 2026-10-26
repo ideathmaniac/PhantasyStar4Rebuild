@@ -24,7 +24,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.28"
+#define APP_VERSION_W L"v0.29"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -1656,10 +1656,18 @@ static void draw_launcher(int cw, int ch)
     ui_img d = { (uint32_t *)back_bits, back_w, back_h, back_w };
     int lx = (int)(110 * u);
     /* logo */
+    int logo_bottom = (int)(60 * u);   /* the subtitle goes under the logo as actually drawn */
     if (l_logo) {
-        int sc = (int)(ch * 0.27 / l_lh + 0.5);
-        if (sc < 1) sc = 1;
-        ui_glow_rgba(&d, lx - (int)(30 * u), (int)(60 * u), l_logo, l_lw, l_lh, sc, 0xFFB43C, 90);
+        /* whole-pixel scale that fits above the list (it starts lower on the main page than on the
+         * other pages) and across the window; no logo at all when even 1x does not fit */
+        double room = (l_page == 0 ? 470 : 200) * u - 60 * u - 40 * u;
+        if (room > ch * 0.27) room = ch * 0.27;
+        int sc = (int)(room / l_lh), wsc = (cw - lx) / (l_lw > 0 ? l_lw : 1);
+        if (sc > wsc) sc = wsc;
+        if (sc >= 1) {
+            ui_glow_rgba(&d, lx - (int)(30 * u), (int)(60 * u), l_logo, l_lw, l_lh, sc, 0xFFB43C, 90);
+            logo_bottom = (int)(60 * u) + l_lh * sc + (int)(12 * u);
+        }
     }
     /* menu */
     int my = (int)(470 * u), ih = (int)(62 * u), sub = (int)(22 * u);
@@ -1741,7 +1749,7 @@ static void draw_launcher(int cw, int ch)
     } else if (l_page == 1 && slot >= 0) {
         l_text(cx + pad, cy + pad, L"Этот слот пуст", RGBC(150, 160, 200), l_font_card);
     }
-    l_text(lx + (int)(8 * u), (int)(60 * u) + (l_logo ? (int)(ch * 0.27) + (int)(8 * u) : 0), L"НАТИВНАЯ ВЕРСИЯ ДЛЯ ПК · " APP_VERSION_W, RGBC(159, 176, 255), l_font_small);
+    l_text(lx + (int)(8 * u), logo_bottom, L"НАТИВНАЯ ВЕРСИЯ ДЛЯ ПК · " APP_VERSION_W, RGBC(159, 176, 255), l_font_small);
     y = my;
     for (int i = 0; i < n; i++) {
         int hgt = (l_page == 0 && subs[i][0]) ? ih + sub : ih;
@@ -2301,9 +2309,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.28");
+    diag_init(exe_dir, "0.29");
     diag_info = settings_info;
-    logw("start, version 0.28");
+    logw("start, version 0.29");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
