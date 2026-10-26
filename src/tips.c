@@ -9,8 +9,9 @@
  *   properties ROM $2AB048, 8 bytes per entry (techniques 0-39, skills from 40):
  *              effect, TP cost, target, power, ...
  * RAM (found with save states, see tests): battle mode $FFEF00 == $14;
- *   $FF410A 2 = technique list open, 3 = skill list open; $FF41A3 the chosen
- *   command (1 techniques, 2 skills); $FF412E the technique list as shown
+ *   $FF4109 the command menu state, 8 = technique list open, $11 = skill
+ *   list open ($FF410A / $FF41A3 keep the previous character's choice, so
+ *   they cannot be used); $FF412E the technique list as shown
  *   (ids + 1), cursor $FF41AF; the skill list is the acting character's
  *   record +$62 (ids + 1, shown in reverse order), cursor $FF41BB; the actor
  *   is party slot $FF4107 (party list $FFF40A, records $FFF500 + n * $80).
@@ -296,14 +297,14 @@ int tips_current(tip_t *t)
 {
     uint16_t mode = rw(0xEF00);
     if (mode == 0x14) {
-        uint8_t open = g_ram[0x410A], cmd = g_ram[0x41A3];
-        if (open == 2 && cmd == 1) {
+        uint8_t state = g_ram[0x4109];     /* command menu state: 8 technique list, $11 skill list */
+        if (state == 0x08) {
             int cur = g_ram[0x41AF];
             if (cur > 15) return 0;
             int v = g_ram[0x412E + cur];
             return v ? fill(t, 0, v - 1) : 0;
         }
-        if (open == 3 && cmd == 2) {
+        if (state == 0x11) {
             int slot = g_ram[0x4107];
             if (slot > 4) return 0;
             int rec = g_ram[0xF40A + slot];
