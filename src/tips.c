@@ -12,8 +12,8 @@
  *   $FF4109 the command menu state, 8 = technique list open, $11 = skill
  *   list open ($FF410A / $FF41A3 keep the previous character's choice, so
  *   they cannot be used); $FF412E the technique list as shown
- *   (ids + 1), cursor $FF41AF; the skill list is the acting character's
- *   record +$62 (ids + 1, shown in reverse order), cursor $FF41BB; the actor
+ *   (ids + 1), cursor $FF41AF + 2 * slot; the skill list is the acting character's
+ *   record +$62 (ids + 1, shown in reverse order), cursor $FF41BB + 2 * slot; the actor
  *   is party slot $FF4107 (party list $FFF40A, records $FFF500 + n * $80).
  *   Field: mode $0C, window $FFEC90 == $56 is the technique list
  *   ($FFE210, cursor $FFECA0).
@@ -298,21 +298,21 @@ int tips_current(tip_t *t)
     uint16_t mode = rw(0xEF00);
     if (mode == 0x14) {
         uint8_t state = g_ram[0x4109];     /* command menu state: 8 technique list, $11 skill list */
+        int slot = g_ram[0x4107];          /* acting party slot; each slot keeps its own cursors */
+        if (slot > 4) return 0;
         if (state == 0x08) {
-            int cur = g_ram[0x41AF];
+            int cur = g_ram[0x41AF + 2 * slot];
             if (cur > 15) return 0;
             int v = g_ram[0x412E + cur];
             return v ? fill(t, 0, v - 1) : 0;
         }
         if (state == 0x11) {
-            int slot = g_ram[0x4107];
-            if (slot > 4) return 0;
             int rec = g_ram[0xF40A + slot];
             if (rec > 15) return 0;
             const uint8_t *r = &g_ram[0xF500 + rec * 0x80 + 0x62];
             int list[8], n = 0;
             for (int i = 7; i >= 0; i--) if (r[i]) list[n++] = r[i];
-            int cur = g_ram[0x41BB];
+            int cur = g_ram[0x41BB + 2 * slot];
             return cur < n ? fill(t, 1, list[cur] - 1) : 0;
         }
         return 0;
