@@ -9,6 +9,8 @@ typedef struct {
     char name[48];     /* UTF-8, "Ксенофаг" */
     int hp, attack, defence, strength, mental, agility, dexterity, exp, meseta;
     uint32_t seen, killed;
+    char weak[96], resist[120];   /* elements it is weak to / resists ("" if none) */
+    int machine;                  /* a machine (ЭМИ and Помехи work on it) */
 } best_info_t;
 
 void bestiary_after_frame(void);                    /* after every emulated frame */

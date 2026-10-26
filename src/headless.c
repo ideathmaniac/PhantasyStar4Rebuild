@@ -207,7 +207,7 @@ int main(int argc, char **argv)
             }
         }
         if (getenv("SHOP_LOG")) {                    /* shop helper */
-            static int last = -2; shop_t sh; int k = (shop_current(&sh) || shop_inventory(&sh)) ? sh.id : -1;
+            static int last = -2; shop_t sh; int k = (shop_current(&sh) || shop_inventory(&sh) || shop_battle_item(&sh)) ? sh.id : -1;
             if (k != last) {
                 last = k;
                 if (k < 0) fprintf(stderr, "frame %ld: (no shop list)\n", f + 1);
@@ -263,18 +263,32 @@ int main(int argc, char **argv)
             best_info_t b;
             if (!bestiary_info(id, &b)) { if (getenv("BEST_ALL")) fprintf(stderr, "%3d: -\n", id); continue; }
             if (b.seen || getenv("BEST_ALL"))
-                fprintf(stderr, "%3d %s: HP %d atk %d def %d agi %d exp %d mes %d | seen %u killed %u\n", id, b.name, b.hp, b.attack, b.defence, b.agility, b.exp, b.meseta, b.seen, b.killed);
+                fprintf(stderr, "%3d %s: HP %d atk %d def %d agi %d exp %d mes %d | seen %u killed %u | weak %s | resist %s\n", id, b.name, b.hp, b.attack, b.defence, b.agility, b.exp, b.meseta, b.seen, b.killed, b.weak, b.resist);
         }
     }
     { extern unsigned long g_ym_w68, g_ym_wz80; if (getenv("YM_COUNT")) fprintf(stderr, "ym writes: 68k %lu, z80 %lu\n", g_ym_w68, g_ym_wz80); }
     if (getenv("MINIMAP")) {   /* write the minimap of the last frame */
         int ps4_ws_minimap(uint32_t *out, int ow, int oh, int *mx, int *my, int *fw, int *fh);
-        static uint32_t mm[160 * 120]; int mx, my, fw, fh;
-        if (ps4_ws_minimap(mm, 160, 120, &mx, &my, &fw, &fh)) {
-            FILE *o = fopen(getenv("MINIMAP"), "wb"); fprintf(o, "P6\n160 120\n255\n");
-            for (int k = 0; k < 160 * 120; k++) { int x = k % 160, y = k / 160; uint32_t c = (abs(x - mx) <= 1 && abs(y - my) <= 1) ? 0xFF0000 : mm[k]; fputc(c >> 16, o); fputc((c >> 8) & 255, o); fputc(c & 255, o); }
+        static uint32_t mm[256 * 256]; int mx, my, fw, fh; int MW = getenv("MM_W") ? atoi(getenv("MM_W")) : 160, MH = getenv("MM_H") ? atoi(getenv("MM_H")) : 120;
+        if (ps4_ws_minimap(mm, MW, MH, &mx, &my, &fw, &fh)) {
+            FILE *o = fopen(getenv("MINIMAP"), "wb"); fprintf(o, "P6\n%d %d\n255\n", MW, MH);
+            for (int k = 0; k < MW * MH; k++) { int x = k % MW, y = k / MW; uint32_t c = (abs(x - mx) <= 1 && abs(y - my) <= 1) ? 0xFF0000 : mm[k]; fputc(c >> 16, o); fputc((c >> 8) & 255, o); fputc(c & 255, o); }
             fclose(o); fprintf(stderr, "minimap: player %d,%d map %dx%d\n", mx, my, fw, fh);
         } else fprintf(stderr, "minimap: not available\n");
+    }
+    if (getenv("STATE_OUT")) {   /* save a state at the end, as the Windows build does */
+        size_t emu_state_size(void); void emu_state_save(uint8_t *out);
+        size_t n = emu_state_size(); uint8_t *b = malloc(n); emu_state_save(b);
+        FILE *o = fopen(getenv("STATE_OUT"), "wb"); if (o) { fwrite(b, 1, n, o); fclose(o); } free(b);
+    }
+    if (getenv("WORLD_IMG")) {
+        int ps4_world_image(uint32_t *out, int maxw, int maxh, int *ow, int *oh, int *px, int *py);
+        static uint32_t wi[512 * 1024]; int w, h, x, y;
+        if (ps4_world_image(wi, 512, 1024, &w, &h, &x, &y)) {
+            FILE *o = fopen(getenv("WORLD_IMG"), "wb"); fprintf(o, "P6\n%d %d\n255\n", w, h);
+            for (int k = 0; k < w * h; k++) { int xx = k % w, yy = k / w; uint32_t c = (abs(xx - x) <= 2 && abs(yy - y) <= 2) ? 0xFF0000 : wi[k]; fputc(c >> 16, o); fputc((c >> 8) & 255, o); fputc(c & 255, o); }
+            fclose(o); fprintf(stderr, "world: %dx%d player %d,%d\n", w, h, x, y);
+        } else fprintf(stderr, "world: none\n");
     }
     return 0;
 }

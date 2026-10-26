@@ -228,3 +228,24 @@ int shop_inventory(shop_t *s)
     if (id < 1 || id > NITEMS) return 0;
     return describe(s, id, 0);
 }
+
+/* the battle item list: menu state $FF4109 == $17, cursor $FF41C5 + 2 * slot
+ * (index into the whole list, 4 rows a page): the acting character's worn
+ * items (right hand, left hand, head, body) followed by the bag */
+int shop_battle_item(shop_t *s)
+{
+    if (rw(0xEF00) != 0x14 || g_ram[0x4109] != 0x17) return 0;
+    int slot = g_ram[0x4107];
+    if (slot > 4) return 0;
+    int rec = g_ram[0xF40A + slot];
+    if (rec > 15) return 0;
+    int list[44], n = 0;
+    for (int k = 0; k < 4; k++) { int v = g_ram[0xF500 + rec * 0x80 + 0x4C + k]; if (v) list[n++] = v; }
+    for (int k = 0; k < 40; k++) { int v = g_ram[0xF410 + k]; if (v) list[n++] = v; }
+    int cur = g_ram[0x41C5 + 2 * slot];
+    if (cur >= n) return 0;
+    if (!describe(s, list[cur], 0)) return 0;
+    s->nrow = 0;   /* no wardrobe comparison in a battle */
+    s->battle = 1;
+    return 1;
+}

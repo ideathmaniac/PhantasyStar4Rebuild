@@ -24,7 +24,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.35"
+#define APP_VERSION_W L"v0.36"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -296,6 +296,23 @@ static void fog_load(void)
     int sz; uint8_t *f = emu_fog_data(&sz);
     if (b && f && n == (size_t)sz) memcpy(f, b, n);
     free(b);
+}
+static void world_path(wchar_t *p) { path_in_exe_dir(p, L"saves\\PS4_world.bin"); }
+static void world_load(void)
+{
+    wchar_t p[700]; world_path(p);
+    size_t n = 0; uint8_t *b = read_file(p, &n);
+    int sz; uint8_t *f = emu_world_data(&sz);
+    if (b && f && n == (size_t)sz) memcpy(f, b, n);
+    free(b);
+}
+static void world_save(void)
+{
+    int sz; uint8_t *f = emu_world_data(&sz);
+    if (!f) return;
+    saves_dir();
+    wchar_t p[700]; world_path(p);
+    write_file(p, f, (size_t)sz);
 }
 static void fog_save(void)
 {
@@ -972,6 +989,8 @@ static void draw_tip(int px, int py, int pw, int ph);
 static void draw_shop(int px, int py, int pw, int ph);
 static void draw_enemy_hp(int px, int py, int pw, int ph);
 static void draw_minimap(int px, int py, int pw, int ph);
+static int world_open;
+static void draw_world(int cw, int ch);
 static void draw_ach_toast(void);
 
 /* ---------- OpenGL path (GPU scaling, vsync) ---------- */
@@ -1065,6 +1084,7 @@ static void present(void)
     /* overlays are drawn with GDI into the back buffer, then copied */
     menu_rect[2] = status_rect[2] = tip_rect[2] = ach_rect[2] = hp_rect[2] = mm_rect[2] = 0;
     if (launcher_open) draw_launcher(cw, ch);
+    else if (world_open && !menu_open) draw_world(cw, ch);
     else if (!menu_open) {
         if (C.tips) draw_tip(x, y, w, h);
         if (C.shop_help && !tip_rect[2]) draw_shop(x, y, w, h);
@@ -1328,18 +1348,42 @@ static void draw_shop(int px, int py, int pw, int ph)
     if (use[0] && text_w(use, font_small) + pad * 2 > need) need = text_w(use, font_small) + pad * 2;
     for (int i = 0; i < nr; i++) if (text_w(rows[i], font_small) + pad * 2 > need) need = text_w(rows[i], font_small) + pad * 2;
     if (need > bw) bw = need < pw ? need : pw;
-    int bx = px + (pw - bw) / 2, by = py + ph - bh - ph / 40;
+    int bx = px + (pw - bw) / 2, by = s.battle ? py + ph / 40 : py + ph - bh - ph / 40;   /* the battle list is low on screen */
     fill(bx, by, bw, bh, RGBC(200, 205, 220));
     fill(bx + 2, by + 2, bw - 4, bh - 4, RGBC(10, 30, 96));
     int ty = by + pad;
     draw_text(bx + pad, ty, name, RGBC(255, 230, 120), font_big);
-    draw_text(bx + bw - pad - text_w(l1, font_small), ty + (font_h - font_h * 4 / 5) / 2, l1,
+    if (!s.battle) draw_text(bx + bw - pad - text_w(l1, font_small), ty + (font_h - font_h * 4 / 5) / 2, l1,
               left >= 0 ? RGBC(170, 200, 255) : RGBC(255, 150, 140), font_small);
     ty += lh;
     draw_text(bx + pad, ty, l2, RGBC(255, 255, 255), font_small); ty += lh;
     if (use[0]) { draw_text(bx + pad, ty, use, RGBC(140, 255, 150), font_small); ty += lh; }
     for (int i = 0; i < nr; i++) { draw_text(bx + pad, ty, rows[i], rcol[i], font_small); ty += lh; }
     tip_rect[0] = bx; tip_rect[1] = by; tip_rect[2] = bw; tip_rect[3] = bh;
+}
+
+/* world map screen (key N): the planet explored so far, over the whole window */
+static void draw_world(int cw, int ch)
+{
+    static uint32_t img[512 * 1024];
+    int w, h, mx, my;
+    if (!emu_world_image(img, 512, 1024, &w, &h, &mx, &my)) { world_open = 0; set_status(L"карта мира доступна на карте планеты"); return; }
+    fill(0, 0, cw, ch, RGBC(8, 8, 16));
+    int sc = (ch - font_h * 3) / h; if ((cw - font_h * 2) / w < sc) sc = (cw - font_h * 2) / w;
+    int dw, dh;
+    if (sc >= 1) { dw = w * sc; dh = h * sc; } else { dh = ch - font_h * 3; dw = w * dh / h; if (dw > cw) { dw = cw; dh = h * dw / w; } }
+    int x0 = (cw - dw) / 2, y0 = font_h * 2;
+    BITMAPINFO bi; memset(&bi, 0, sizeof bi);
+    bi.bmiHeader.biSize = sizeof bi.bmiHeader; bi.bmiHeader.biWidth = w; bi.bmiHeader.biHeight = -h;
+    bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32; bi.bmiHeader.biCompression = BI_RGB;
+    SetStretchBltMode(back_dc, sc >= 1 ? COLORONCOLOR : HALFTONE); SetBrushOrgEx(back_dc, 0, 0, 0);
+    StretchDIBits(back_dc, x0, y0, dw, dh, 0, 0, w, h, img, &bi, DIB_RGB_COLORS, SRCCOPY);
+    int on = (now_ms() / 300) & 1, m = font_h / 2 > 4 ? font_h / 2 : 4;
+    int cx = x0 + mx * dw / w, cy = y0 + my * dh / h;
+    fill(cx - m / 2 - 1, cy - m / 2 - 1, m + 2, m + 2, RGBC(0, 0, 0));
+    fill(cx - m / 2, cy - m / 2, m, m, on ? RGBC(255, 60, 60) : RGBC(255, 230, 120));
+    draw_text(font_h, font_h / 2, L"Карта мира — открывается по мере путешествия.  N или Esc — закрыть", RGBC(225, 230, 255), font_small);
+    menu_rect[0] = 0; menu_rect[1] = 0; menu_rect[2] = cw; menu_rect[3] = ch;
 }
 
 /* minimap: the field map around the party, top right of the picture */
@@ -1379,16 +1423,19 @@ static void draw_enemy_hp(int px, int py, int pw, int ph)
     int ids[8], hp[8], mx[8];
     int n = bestiary_battle(ids, hp, mx, 8);
     if (n <= 0) return;
-    wchar_t nm[8][48]; int alive = 0, wname = 0;
+    wchar_t nm[8][48], wk[8][110]; int alive = 0, wname = 0, wweak = 0;
     for (int i = 0; i < n; i++) {
         best_info_t b;
         if (!emu_bestiary(ids[i], &b)) return;
         MultiByteToWideChar(65001, 0, b.name, -1, nm[i], 48);
-        if (hp[i] > 0) { alive++; int w = text_w(nm[i], font_small); if (w > wname) wname = w; }
+        wk[i][0] = 0;
+        if (b.weak[0]) { wchar_t w2[100]; MultiByteToWideChar(65001, 0, b.weak, -1, w2, 100); _snwprintf(wk[i], 109, L"слаб: %ls", w2); wk[i][109] = 0; }
+        if (hp[i] > 0) { alive++; int w = text_w(nm[i], font_small); if (w > wname) wname = w;
+                         int w3 = wk[i][0] ? text_w(wk[i], font_small) + font_h / 2 : 0; if (w3 > wweak) wweak = w3; }
     }
     if (!alive) return;
     int lh = font_h, pad = font_h / 3, barw = font_h * 4, numw = text_w(L"0000/0000", font_small);
-    int bw = pad * 3 + wname + font_h / 2 + barw + font_h / 2 + numw, bh = alive * lh + pad * 2;
+    int bw = pad * 3 + wname + font_h / 2 + barw + font_h / 2 + numw + wweak, bh = alive * lh + pad * 2;
     int bx = px + pw - bw - font_h / 3, by = py + font_h / 3;
     fill(bx, by, bw, bh, RGBC(150, 160, 200));
     fill(bx + 1, by + 1, bw - 2, bh - 2, RGBC(10, 20, 60));
@@ -1404,6 +1451,7 @@ static void draw_enemy_hp(int px, int py, int pw, int ph)
         if (f > 0) fill(x, yb, f, hb, col);
         wchar_t t[24]; _snwprintf(t, 23, L"%d/%d", hp[i], m); t[23] = 0;
         draw_text(x + barw + font_h / 2, ty, t, RGBC(200, 210, 240), font_small);
+        if (wk[i][0]) draw_text(x + barw + font_h / 2 + numw + font_h / 2, ty, wk[i], RGBC(140, 255, 150), font_small);
         ty += lh;
     }
     hp_rect[0] = bx; hp_rect[1] = by; hp_rect[2] = bw; hp_rect[3] = bh;
@@ -1514,6 +1562,7 @@ static void build_menu(void)
         add(L"Бестиарий", L"▸");
         { static wchar_t a2[40]; int got = 0; for (int i = 0; i < NACH; i++) got += ach_time[i] != 0;
           _snwprintf(a2, 39, L"%d из %d  ▸", got, NACH); add(L"Достижения", a2); }
+        add(L"Карта мира (клавиша N)", L"▸");
         add(L"Назад", 0);
         break; }
     case M_ACH: {
@@ -2104,7 +2153,8 @@ static void menu_act(int dir)
     } else if (m_page == M_STATS) {
         if (!dir && i == 5) { m_page = M_BEST; m_best_page = 0; m_sel = 0; }
         if (!dir && i == 6) { m_page = M_ACH; m_sel = NACH; }
-        if (!dir && i == 7) { m_page = M_MAIN; m_sel = 4; }
+        if (!dir && i == 7) { menu_set_open(0); world_open = 1; }
+        if (!dir && i == 8) { m_page = M_MAIN; m_sel = 4; }
     } else if (m_page == M_ACH) {
         if (!dir && i == NACH) { m_page = M_STATS; m_sel = 6; }
     } else if (m_page == M_BEST) {
@@ -2114,8 +2164,10 @@ static void menu_act(int dir)
             best_info_t b;
             if (emu_bestiary(m_best_ids[i], &b)) {
                 wchar_t nm[48], t[200]; MultiByteToWideChar(65001, 0, b.name, -1, nm, 48);
-                _snwprintf(t, 199, L"%ls: атака %d, защита %d, сила %d, ментал %d, ловкость %d, меткость %d; встречено %u", nm,
-                           b.attack, b.defence, b.strength, b.mental, b.agility, b.dexterity, b.seen);
+                wchar_t wk[100], rs[130];
+                MultiByteToWideChar(65001, 0, b.weak, -1, wk, 100); MultiByteToWideChar(65001, 0, b.resist, -1, rs, 130);
+                _snwprintf(t, 199, L"%ls%ls: атака %d, защита %d, ловкость %d%ls%ls%ls%ls", nm, b.machine ? L" (механизм)" : L"",
+                           b.attack, b.defence, b.agility, wk[0] ? L"; слаб: " : L"", wk, rs[0] ? L"; устойчив: " : L"", rs);
                 t[199] = 0; set_status(t);
             }
         }
@@ -2257,6 +2309,12 @@ static void on_key(int vk, int alt)
     if (menu_open) { menu_key(vk); return; }
     if (launcher_open) { launcher_key(vk); return; }
     if (vk == VK_F1) { menu_set_open(1); m_page = M_HELP; return; }
+    if (world_open && (vk == 'N' || vk == VK_ESCAPE)) { world_open = 0; return; }
+    if (vk == 'N') {   /* world map screen (unless N is bound to something) */
+        int bound = 0;
+        for (int a = 0; a < NACT; a++) for (int i = 0; i < NKEY; i++) if (C.keys[a][i] == 'N') bound = 1;
+        if (!bound) { world_open = 1; return; }
+    }
     if (vk == 'M') {   /* minimap: off, small, large (unless M is bound to something) */
         int bound = 0;
         for (int a = 0; a < NACT; a++) for (int i = 0; i < NKEY; i++) if (C.keys[a][i] == 'M') bound = 1;
@@ -2481,9 +2539,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.35");
+    diag_init(exe_dir, "0.36");
     diag_info = settings_info;
-    logw("start, version 0.35");
+    logw("start, version 0.36");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
@@ -2560,7 +2618,7 @@ static int run(void)
     stats_load();
     best_load();
     ach_load();
-    fog_load(); emu_set_fog(C.fog);
+    fog_load(); emu_set_fog(C.fog); world_load();
     input_init();
     sram_read();
     emu_reset();
@@ -2585,6 +2643,14 @@ static int run(void)
         if (quit) break;
         uint64_t t = now_ms();
 
+        if (world_open && !launcher_open && !menu_open) {   /* the world map screen pauses the game */
+            poll_pads();
+            if (ppressed(A_MENU) || ppressed(A_B)) world_open = 0;
+            present();
+            Sleep(16);
+            pace_reset();
+            continue;
+        }
         if (launcher_open || menu_open) {
             poll_pads();
             if (menu_open) menu_pad(); else launcher_pad();
@@ -2619,7 +2685,7 @@ static int run(void)
 
         if (emu_sram_dirty()) sram_pending = 1;
         if (sram_pending && frame_no % 120 == 0) { sram_write(); sram_pending = 0; stats_save(); }
-        if (frame_no % 1800 == 0) { best_save(); fog_save(); }
+        if (frame_no % 1800 == 0) { best_save(); fog_save(); world_save(); }
         if (frame_no % 30 == 0) ach_check();
         if (C.autosave_min && t - last_autosave > (uint64_t)C.autosave_min * 60000 && emu_on_field() && !emu_in_battle()) {
             state_save(0, 0);
@@ -2631,6 +2697,7 @@ static int run(void)
     stats_save();
     best_save();
     fog_save();
+    world_save();
     cfg_save();
     audio_close();
     DeleteFileW(marker);

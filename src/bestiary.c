@@ -12,6 +12,7 @@
  *   ROM $2F5B30       names, ended by FE or FF, in id order
  */
 #include <string.h>
+#include <stdio.h>
 #include "md.h"
 #include "bestiary.h"
 
@@ -93,6 +94,19 @@ int bestiary_info(int id, best_info_t *b)
     b->strength = e[4]; b->mental = e[5]; b->agility = e[6]; b->dexterity = e[7];
     b->attack = e[8] << 8 | e[9]; b->defence = e[10];
     b->exp = e[44] << 8 | e[45]; b->meseta = e[46] << 8 | e[47];
+    /* sensitivity to the techniques' elements, ROM +12..+25: index = element code - 1;
+     * 0 not hurt, 1 resists, 2 normal, 3 weak, 4 very weak. Checked against the guides:
+     * Джут (Juza) weak to 6 and 13, Приспешник тьмы (Gy-Laguiah) weak to 5, 6, 13, resists 3 */
+    static const struct { int idx; const char *name; } el[] = {
+        { 0, "ветер" }, { 1, "энергия" }, { 2, "огонь" }, { 3, "гравитация" }, { 4, "лёд" }, { 5, "свет" },
+        { 6, "гром" }, { 12, "святость" } };
+    int kw = 0, kr = 0;
+    for (size_t i = 0; i < sizeof el / sizeof el[0]; i++) {
+        int v = e[12 + el[i].idx];
+        if (v >= 3) kw += snprintf(b->weak + kw, sizeof b->weak - kw, "%s%s%s", kw ? ", " : "", el[i].name, v >= 4 ? " (очень)" : "");
+        else if (v <= 1 && el[i].idx != 12) kr +=   /* "святость" leaves most monsters cold: only its weakness is news */ snprintf(b->resist + kr, sizeof b->resist - kr, "%s%s%s", kr ? ", " : "", el[i].name, v == 0 ? " (не берёт)" : "");
+    }
+    b->machine = e[12 + 11] >= 2;   /* code $0C (ЭМИ, Помехи) works only on machines */
     bestiary_get(id, &b->seen, &b->killed);
     return 1;
 }

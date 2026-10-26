@@ -36,6 +36,7 @@ static int cam_x, cam_y;                /* world position of screen (0,0) this f
 static int battle, battle_mirror;       /* this frame is a battle; its background is one screen wide */
 int ps4_field_live;                     /* last frame showed the field map unobstructed */
 static void fog_mark(void);
+static void world_capture(void);
 static int ps4_field_live_any;          /* the field, maybe under windows */
 int g_ws_probe;                         /* run the field check even at 4:3 */
 int g_ws_battle = 1;                    /* widen battles too */
@@ -141,6 +142,7 @@ static int ws_classify(void)
         snap_wa = wa; snap_ha = ha; snap_wb = wb; snap_hb = hb; snap_maskb = maskb;
         snap_valid = 1;
         fog_mark();
+        world_capture();
         return 1;
     }
     if (!snap_valid) return 0;
@@ -272,3 +274,75 @@ int ps4_ws_minimap(uint32_t *out, int ow, int oh, int *mx, int *my, int *full_w,
     *mx = (px - x0) / 4; *my = (py - y0) / 4;
     return clear ? 2 : 1;
 }
+
+/* ---- world maps: the ring of 32 block rows in RAM is copied into a whole
+ * map as the party travels, with the colours of each block sampled once
+ * (one per 8x8 tile) while its tiles are in VRAM ---- */
+#define WORLDS 4
+#define WROWS 256
+typedef struct {
+    int id, w, h;                       /* map number, size in blocks */
+    uint8_t blk[2][WROWS][128];         /* plane A, plane B block ids */
+    uint8_t known[WROWS][16];           /* rows / columns seen */
+    uint32_t col[2][256][16];           /* block colours, top bit set = opaque (plane A) */
+    uint8_t col_ok[2][256 / 8];
+} world_t;
+static world_t worlds[WORLDS];
+static world_t *world_for(int id, int w, int h)
+{
+    for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == id) return &worlds[i];
+    for (int i = 0; i < WORLDS; i++) if (!worlds[i].w) { memset(&worlds[i], 0, sizeof worlds[i]); worlds[i].id = id; worlds[i].w = w; worlds[i].h = h; return &worlds[i]; }
+    return 0;
+}
+static void block_colours(world_t *W, int plane, int blk, int mask)
+{
+    if (W->col_ok[plane][blk >> 3] & (1 << (blk & 7))) return;
+    for (int t = 0; t < 16; t++) {
+        int tw = snap_blocks[(blk * 16 + t) & 0xFFF] & mask, op;
+        uint32_t c = tile_pixel(tw, 3, 3, &op);
+        W->col[plane][blk][t] = c | (op ? 0x80000000u : 0);
+    }
+    W->col_ok[plane][blk >> 3] |= (uint8_t)(1 << (blk & 7));
+}
+static void world_capture(void)
+{
+    int w = snap_wa, h = snap_ha;
+    if (w * h <= 4096 || w > 128 || h > WROWS) return;
+    world_t *W = world_for(ramw(0xEC28), w, h);
+    if (!W) return;
+    int ring = 4096 / w, py = ramw(0xC034) >> 5;
+    for (int by = py - ring / 2 + 3; by <= py + ring / 2 - 3; by++) {
+        if (by < 0 || by >= h) continue;
+        int r = by % ring;
+        for (int bx = 0; bx < w; bx++) {
+            int a = snap_maps[(r * w + bx) & 0xFFF], b = snap_maps[0x1000 + ((r * w + bx) & 0xFFF)];
+            W->blk[0][by][bx] = (uint8_t)a; W->blk[1][by][bx] = (uint8_t)b;
+            block_colours(W, 0, a, 0xBFFF); block_colours(W, 1, b, snap_maskb);
+            W->known[by][bx >> 3] |= (uint8_t)(1 << (bx & 7));
+        }
+    }
+}
+/* the whole world map, one pixel per tile (w*4 x h*4); 0 if this map is not a world map */
+int ps4_world_image(uint32_t *out, int maxw, int maxh, int *ow, int *oh, int *px, int *py)
+{
+    int id = ramw(0xEC28);
+    world_t *W = 0;
+    for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == id) W = &worlds[i];
+    if (!W || W->w * 4 > maxw || W->h * 4 > maxh) return 0;
+    *ow = W->w * 4; *oh = W->h * 4;
+    for (int by = 0; by < W->h; by++)
+        for (int bx = 0; bx < W->w; bx++) {
+            int k = (W->known[by][bx >> 3] >> (bx & 7)) & 1;
+            for (int t = 0; t < 16; t++) {
+                uint32_t c = 0x10101A;
+                if (k) {
+                    uint32_t a = W->col[0][W->blk[0][by][bx]][t];
+                    c = (a & 0x80000000u) ? a & 0xFFFFFF : W->col[1][W->blk[1][by][bx]][t] & 0xFFFFFF;
+                }
+                out[(by * 4 + t / 4) * *ow + bx * 4 + (t & 3)] = c;
+            }
+        }
+    *px = ramw(0xC030) / 8; *py = ramw(0xC034) / 8;
+    return 1;
+}
+uint8_t *ps4_world_data(int *size) { *size = sizeof worlds; return (uint8_t *)worlds; }

@@ -17,11 +17,14 @@ typedef struct shop_s {
     char use[120];      /* what a consumable does ("" for equipment) */
     int nrow;
     shop_row_t row[5];
+    int battle;         /* from the battle item list */
 } shop_t;
 
 /* 1 and *s filled while a shop's buy list is open (known ROM only) */
 int shop_current(shop_t *s);
 /* 1 and *s filled (price -1) while the field menu's inventory list is open */
 int shop_inventory(shop_t *s);
+/* 1 and *s filled (no comparison rows) while the battle item list is open */
+int shop_battle_item(shop_t *s);
 
 #endif
