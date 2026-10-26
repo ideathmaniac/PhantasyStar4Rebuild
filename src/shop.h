@@ -11,14 +11,17 @@ typedef struct {
 } shop_row_t;
 
 typedef struct shop_s {
-    int id, type, atk, def, price, owned;
+    int id, type, atk, def, price, owned;   /* price -1: not in a shop (inventory) */
     unsigned money;
     char name[48], kind[40];
+    char use[120];      /* what a consumable does ("" for equipment) */
     int nrow;
     shop_row_t row[5];
 } shop_t;
 
 /* 1 and *s filled while a shop's buy list is open (known ROM only) */
 int shop_current(shop_t *s);
+/* 1 and *s filled (price -1) while the field menu's inventory list is open */
+int shop_inventory(shop_t *s);
 
 #endif

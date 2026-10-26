@@ -62,3 +62,15 @@ void qol_after_frame(void)
     if (mode == 0x14) { scale(0x41CE, &last_exp, exp_mul); scale(0x41D0, &last_mes, mes_mul); }
     else qol_resync();
 }
+
+/* 1 while the game types out a message letter by letter: the 68k is inside
+ * the per-letter wait of the text routine (return address $06A20C on the
+ * stack, see $06A1F6: wait $FFF440 + 1 frames per letter) */
+#include "cpu.h"
+int qol_text_printing(void)
+{
+    uint32_t sp = R.a[7] & 0xFFFF;
+    for (uint32_t a = sp; a < sp + 0x80 && a + 3 < 0x10000; a += 2)
+        if (g_ram[a] == 0x00 && g_ram[a + 1] == 0x06 && g_ram[a + 2] == 0xA2 && g_ram[a + 3] == 0x0C) return 1;
+    return 0;
+}

@@ -106,6 +106,7 @@ static void item_name(int id, char *out, int n)
     decode(&g_rom[addr[id]], 40, out, n, 1);
 }
 
+static int describe(shop_t *s, int id, int priced);
 static const char *type_name(int t)
 {
     switch (t) {
@@ -129,7 +130,34 @@ int shop_current(shop_t *s)
     if (list >= g_rom_size || count < 1 || count > 16 || cur >= count) return 0;
     int id = g_rom[list + cur];
     if (id < 1 || id > NITEMS) return 0;
+    return describe(s, id, 1);
+}
 
+/* consumables and other items that are not worn (after their effect codes,
+ * which are the techniques' codes: $12 heal, $13 poison, $14 paralysis,
+ * $15/$16 revive, $19/$1A teleport) */
+static const char *use_text(int id)
+{
+    switch (id) {
+    case 125: return "Немного лечит одного героя (кроме андроидов).";
+    case 126: return "Лечит одного героя сильнее Монолеча.";
+    case 127: return "Сильно лечит одного героя.";
+    case 128: return "Излечивает героя от яда.";
+    case 129: return "Снимает с героя паралич.";
+    case 130: return "Возвращает к жизни павшего героя.";
+    case 131: return "Лечит весь отряд.";
+    case 132: return "Переносит отряд в уже посещённый город.";
+    case 133: return "Выводит отряд из подземелья.";
+    case 134: return "Оживляет героя или лечит яд, сон и паралич.";
+    case 139: return "Взрывчатка: урон врагам в бою.";
+    case 144: return "Ремонтный набор для андроидов.";
+    case 145: case 147: return "Выпечка: нужна для побочного задания.";
+    }
+    return 0;
+}
+
+static int describe(shop_t *s, int id, int priced)
+{
     memset(s, 0, sizeof *s);
     const uint8_t *it = item(id);
     s->id = id;
@@ -137,10 +165,16 @@ int shop_current(shop_t *s)
     s->type = it[10];
     snprintf(s->kind, sizeof s->kind, "%s", type_name(s->type));
     s->atk = it[15]; s->def = it[16];
-    s->price = it[20] << 8 | it[21];
+    s->price = priced ? it[20] << 8 | it[21] : -1;
     s->money = rl(0xF438);
     for (int i = 0; i < 40; i++) if (g_ram[0xF410 + i] == id) s->owned++;
-    if (s->type < 1 || s->type > 7) return 1;   /* not equipment: no comparison */
+    if (s->type < 1 || s->type > 7) {   /* not equipment: what it does instead of a comparison */
+        const char *u = use_text(id);
+        if (u) snprintf(s->use, sizeof s->use, "%s", u);
+        else if (s->type == 9 || s->type == 10) snprintf(s->use, sizeof s->use, "%s", "Сюжетный предмет.");
+        snprintf(s->kind, sizeof s->kind, "%s", s->type == 8 ? "расходуемый предмет" : "особый предмет");
+        return 1;
+    }
 
     int mask = it[8] << 8 | it[9];
     for (int p = 0; p < 5; p++) {
@@ -179,4 +213,18 @@ int shop_current(shop_t *s)
         r->datk = s->atk - oatk; r->ddef = s->def - odef;
     }
     return 1;
+}
+
+/* the field menu's inventory list: window handler $05B4B2, page $FFE206
+ * (8 items each), cursor $FFEC9F, items $FFF410 */
+int shop_inventory(shop_t *s)
+{
+    if (rw(0xEF00) != 0x0C) return 0;
+    uint32_t table = rl(0xEC94);
+    if (table >= g_rom_size || roml(table + (uint32_t)rw(0xEC90) * 8 + 4) != 0x05B4B2) return 0;
+    int page = rw(0xE206), cur = g_ram[0xEC9F];
+    if (page > 4 || cur > 7) return 0;
+    int id = g_ram[0xF410 + page * 8 + cur];
+    if (id < 1 || id > NITEMS) return 0;
+    return describe(s, id, 0);
 }

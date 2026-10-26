@@ -91,6 +91,7 @@ void emu_set_conveniences(int encounters, int exp_mult, int meseta_mult) { qol_s
 const uint32_t *emu_framebuffer(int *w, int *h) { *w = g_fb_width; *h = MD_VIS_LINES; return &g_fb[0][0]; }   /* pitch MD_W_MAX */
 int emu_audio(int16_t *out, int max) { return snd_take(out, max); }
 void emu_set_sound_hold(int on) { g_snd_hold = on; }
+int emu_text_printing(void) { return rom_kind == EMU_ROM_RECOMPILED && qol_text_printing(); }
 
 #define STATE_MAGIC 0x34535031u   /* "1PS4" */
 size_t emu_state_size(void) { return 8 + sizeof R + md_state_size(); }
@@ -144,7 +145,7 @@ uint32_t emu_meseta(void) { return ((uint32_t)g_ram[0xF438] << 24) | ((uint32_t)
 void emu_set_cutscene_detect(int on) { extern int g_ws_probe; if (on) g_ws_probe = 1; }   /* already on for the recompiled ROM (emu_on_field) */
 const uint8_t *emu_work_ram(void) { return g_ram; }
 int emu_bestiary(int id, best_info_t *b) { return rom_kind == EMU_ROM_RECOMPILED && bestiary_info(id, b); }
-int emu_shop(shop_t *s) { return rom_kind == EMU_ROM_RECOMPILED && shop_current(s); }
+int emu_shop(shop_t *s) { return rom_kind == EMU_ROM_RECOMPILED && (shop_current(s) || shop_inventory(s)); }
 int emu_skill_tip(tip_t *t) { return rom_kind == EMU_ROM_RECOMPILED && tips_current(t); }
 int emu_is_cutscene(void) { extern int g_ws_cutscene; return rom_kind == EMU_ROM_RECOMPILED && g_ws_cutscene; }
 int emu_in_battle(void) { return ((g_ram[0xEF00] << 8) | g_ram[0xEF01]) == 0x14; }   /* top-level game mode ($0003DC) */

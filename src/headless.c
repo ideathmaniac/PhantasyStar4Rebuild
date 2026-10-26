@@ -205,13 +205,13 @@ int main(int argc, char **argv)
             }
         }
         if (getenv("SHOP_LOG")) {                    /* shop helper */
-            static int last = -2; shop_t sh; int k = shop_current(&sh) ? sh.id : -1;
+            static int last = -2; shop_t sh; int k = (shop_current(&sh) || shop_inventory(&sh)) ? sh.id : -1;
             if (k != last) {
                 last = k;
                 if (k < 0) fprintf(stderr, "frame %ld: (no shop list)\n", f + 1);
                 else {
-                    fprintf(stderr, "frame %ld: %s | %s | atk %d def %d | %d mes (have %u) | in bag %d\n", f + 1, sh.name, sh.kind,
-                            sh.atk, sh.def, sh.price, sh.money, sh.owned);
+                    fprintf(stderr, "frame %ld: %s | %s | atk %d def %d | %d mes (have %u) | in bag %d | %s\n", f + 1, sh.name, sh.kind,
+                            sh.atk, sh.def, sh.price, sh.money, sh.owned, sh.use);
                     for (int i = 0; i < sh.nrow; i++)
                         fprintf(stderr, "    %s: %s%s%s datk %+d ddef %+d\n", sh.row[i].who, sh.row[i].can ? "" : "НЕ МОЖЕТ ",
                                 sh.row[i].now, sh.row[i].same ? " (same)" : "", sh.row[i].datk, sh.row[i].ddef);

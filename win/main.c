@@ -24,7 +24,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.31"
+#define APP_VERSION_W L"v0.32"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -56,6 +56,7 @@ typedef struct {
     int32_t tips;                          /* added in 0.19: technique descriptions */
     int32_t shop_help;                     /* added in 0.27: shop comparison panel */
     int32_t fast_sound;                    /* added in 0.31: sound during speed-ups: 0 normal tempo, 1 off, 2 sped up */
+    int32_t enemy_hp, text_speed;          /* added in 0.32: monsters' HP in battle; text 0 normal, 1 fast, 2 very fast */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
@@ -71,6 +72,7 @@ typedef struct {
 #define CFG_V11_SIZE (offsetof(cfg_t, tips))
 #define CFG_V12_SIZE (offsetof(cfg_t, shop_help))
 #define CFG_V13_SIZE (offsetof(cfg_t, fast_sound))
+#define CFG_V14_SIZE (offsetof(cfg_t, enemy_hp))
 static cfg_t C;
 
 /* pad input codes */
@@ -94,7 +96,7 @@ static void cfg_defaults(void)
     C.pad_mode = 0; C.vsync = 1; C.use_gl = 1;
     C.fx_mode = FX_PIXELS; C.fx_dither = 1; C.renderer = 0;
     C.hd_pack = 1; C.hd_auto = 0; C.ws_battle = 1; C.backdrop = 1; C.cine = 1;
-    C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; C.tips = 1; C.shop_help = 1;
+    C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; C.tips = 1; C.shop_help = 1; C.enemy_hp = 1; C.text_speed = 1;
     static const uint16_t k[NACT][NKEY] = {
         { VK_UP, 'W' }, { VK_DOWN, 'S' }, { VK_LEFT, 'A' }, { VK_RIGHT, 'D' },
         { 'Z', 'J' }, { 'X', 'K' }, { 'C', VK_SPACE }, { VK_RETURN, 0 },
@@ -187,7 +189,7 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE || n == CFG_V13_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE || n == CFG_V13_SIZE || n == CFG_V14_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
         memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
         if (n < CFG_V4_SIZE && C.hd) C.fx_mode = FX_SMOOTH;
         if (n < CFG_V5_SIZE) C.renderer = C.use_gl ? 0 : 2;
@@ -197,7 +199,8 @@ static void cfg_load(void)
         if (n < CFG_V11_SIZE) { C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; }
         if (n < CFG_V12_SIZE) C.tips = 1;
         if (n < CFG_V13_SIZE) C.shop_help = 1;
-        if (n < sizeof C) C.fast_sound = 0;
+        if (n < CFG_V14_SIZE) C.fast_sound = 0;
+        if (n < sizeof C) { C.enemy_hp = 1; C.text_speed = 1; }
     } else if (n >= 20 + 1200 && *(uint32_t *)b == 0x31475043u)   /* version 1 file: keep the ROM path */
         memcpy(C.rom, b + 20, 1200);
     if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
@@ -209,6 +212,8 @@ static void cfg_load(void)
     C.tips = C.tips != 0;
     C.shop_help = C.shop_help != 0;
     if (C.fast_sound < 0 || C.fast_sound > 2) C.fast_sound = 0;
+    C.enemy_hp = C.enemy_hp != 0;
+    if (C.text_speed < 0 || C.text_speed > 2) C.text_speed = 1;
     free(b);
 }
 
@@ -936,9 +941,10 @@ static void fill(int x, int y, int w, int h, DWORD color)
 
 static void draw_menu(void);
 static void draw_status(void);
-static int menu_rect[4], status_rect[4], tip_rect[4], ach_rect[4];   /* x, y, w, h of overlay boxes drawn this frame */
+static int menu_rect[4], status_rect[4], tip_rect[4], ach_rect[4], hp_rect[4];   /* x, y, w, h of overlay boxes drawn this frame */
 static void draw_tip(int px, int py, int pw, int ph);
 static void draw_shop(int px, int py, int pw, int ph);
+static void draw_enemy_hp(int px, int py, int pw, int ph);
 static void draw_ach_toast(void);
 
 /* ---------- OpenGL path (GPU scaling, vsync) ---------- */
@@ -1030,11 +1036,12 @@ static void present(void)
     if (cpu_hd) run_hd(fb, W, H);
 
     /* overlays are drawn with GDI into the back buffer, then copied */
-    menu_rect[2] = status_rect[2] = tip_rect[2] = ach_rect[2] = 0;
+    menu_rect[2] = status_rect[2] = tip_rect[2] = ach_rect[2] = hp_rect[2] = 0;
     if (launcher_open) draw_launcher(cw, ch);
     else if (!menu_open) {
         if (C.tips) draw_tip(x, y, w, h);
         if (C.shop_help && !tip_rect[2]) draw_shop(x, y, w, h);
+        if (C.enemy_hp && !tip_rect[2]) draw_enemy_hp(x, y, w, h);   /* the technique panel uses the top in battle */
     }
     if (!launcher_open) draw_ach_toast();
     if (menu_open || status_msg[0]) {
@@ -1072,9 +1079,9 @@ static void present(void)
     }
     if (d3d_ok) {
         d3d_frame(pic, PW, PH, ppitch, x, y, w, h, cw, ch, cine_on ? FX_CINE : C.fx_mode, C.smooth, cine_on || C.fx_dither, C.backdrop);
-        int *rects[4] = { menu_rect, status_rect, tip_rect, ach_rect };
+        int *rects[5] = { menu_rect, status_rect, tip_rect, ach_rect, hp_rect };
         if (cw <= back_w && ch <= back_h)
-            for (int k = 0; k < 4; k++) {
+            for (int k = 0; k < 5; k++) {
                 int *r = rects[k];
                 if (r[0] < 0) { r[2] += r[0]; r[0] = 0; }
                 if (r[1] < 0) { r[3] += r[1]; r[1] = 0; }
@@ -1111,8 +1118,8 @@ static void present(void)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W, H, GL_BGRA_EXT, GL_UNSIGNED_BYTE, fb);
             gl_quad(tex_frame, 512, 256, 0, 0, W, H, x, y, w, h, C.smooth);
         }
-        int *rects[4] = { menu_rect, status_rect, tip_rect, ach_rect };
-        for (int k = 0; k < 4; k++) {
+        int *rects[5] = { menu_rect, status_rect, tip_rect, ach_rect, hp_rect };
+        for (int k = 0; k < 5; k++) {
             int *r = rects[k];
             /* keep the copied box inside the back buffer */
             if (r[0] < 0) { r[2] += r[0]; r[0] = 0; }
@@ -1143,8 +1150,8 @@ static void present(void)
     if (C.smooth) SetBrushOrgEx(dc, 0, 0, 0);
     if (cpu_hd) StretchDIBits(dc, x, y, w, h, 0, 0, W * 4, H * 4, hd_buf, &bmi_hd, DIB_RGB_COLORS, SRCCOPY);
     else StretchDIBits(dc, x, y, w, h, 0, 0, W, H, fb, &bmi_fb, DIB_RGB_COLORS, SRCCOPY);
-    int *rects[4] = { menu_rect, status_rect, tip_rect, ach_rect };
-    for (int k = 0; k < 4; k++) if (rects[k][2] > 0) BitBlt(dc, rects[k][0], rects[k][1], rects[k][2], rects[k][3], back_dc, rects[k][0], rects[k][1], SRCCOPY);
+    int *rects[5] = { menu_rect, status_rect, tip_rect, ach_rect, hp_rect };
+    for (int k = 0; k < 5; k++) if (rects[k][2] > 0) BitBlt(dc, rects[k][0], rects[k][1], rects[k][2], rects[k][3], back_dc, rects[k][0], rects[k][1], SRCCOPY);
     ReleaseDC(hwnd, dc);
 }
 
@@ -1254,14 +1261,16 @@ static void draw_shop(int px, int py, int pw, int ph)
     MultiByteToWideChar(65001, 0, s.name, -1, name, 64);
     MultiByteToWideChar(65001, 0, s.kind, -1, kind, 48);
     long left = (long)s.money - s.price;
-    if (left >= 0) _snwprintf(l1, 159, L"%d мес. — останется %ld", s.price, left);
+    if (s.price < 0) { left = 0; wcscpy(l1, L"в сумке"); }   /* the inventory, not a shop */
+    else if (left >= 0) _snwprintf(l1, 159, L"%d мес. — останется %ld", s.price, left);
     else _snwprintf(l1, 159, L"%d мес. — не хватает %ld", s.price, -left);
     l1[159] = 0;
+    wchar_t use[130]; MultiByteToWideChar(65001, 0, s.use, -1, use, 130);
     {
         int k = _snwprintf(l2, 199, L"%ls", kind);
         if (s.atk) k += _snwprintf(l2 + k, 199 - k, L", атака %d", s.atk);
         if (s.def) k += _snwprintf(l2 + k, 199 - k, L", защита %d", s.def);
-        if (s.owned) _snwprintf(l2 + k, 199 - k, L"   (в сумке: %d)", s.owned);
+        if (s.owned && s.price >= 0) _snwprintf(l2 + k, 199 - k, L"   (в сумке: %d)", s.owned);
         l2[199] = 0;
     }
     int nr = 0;
@@ -1271,7 +1280,7 @@ static void draw_shop(int px, int py, int pw, int ph)
         MultiByteToWideChar(65001, 0, r->who, -1, who, 32);
         MultiByteToWideChar(65001, 0, r->now, -1, now, 110);
         if (!r->can) { _snwprintf(rows[nr], 239, L"%ls: не может носить", who); rcol[nr] = RGBC(130, 140, 170); }
-        else if (r->same) { _snwprintf(rows[nr], 239, L"%ls: уже надето", who); rcol[nr] = RGBC(200, 210, 230); }
+        else if (r->same) { _snwprintf(rows[nr], 239, s.price < 0 ? L"%ls: надето такое же" : L"%ls: уже надето", who); rcol[nr] = RGBC(200, 210, 230); }
         else {
             wchar_t d[80] = L""; int k = 0;
             if (r->datk) k += _snwprintf(d + k, 79 - k, L"   %ls %+d атаки", r->datk > 0 ? L"▲" : L"▼", r->datk);
@@ -1284,10 +1293,11 @@ static void draw_shop(int px, int py, int pw, int ph)
         rows[nr][239] = 0; nr++;
     }
     int lh = font_h * 6 / 5, pad = font_h / 2;
-    int lines = 2 + nr;
+    int lines = 2 + nr + (use[0] != 0);
     int bh = lines * lh + pad * 2, bw = pw * 9 / 10;
     int need = text_w(name, font_big) + text_w(l1, font_small) + pad * 4;
     if (text_w(l2, font_small) + pad * 2 > need) need = text_w(l2, font_small) + pad * 2;
+    if (use[0] && text_w(use, font_small) + pad * 2 > need) need = text_w(use, font_small) + pad * 2;
     for (int i = 0; i < nr; i++) if (text_w(rows[i], font_small) + pad * 2 > need) need = text_w(rows[i], font_small) + pad * 2;
     if (need > bw) bw = need < pw ? need : pw;
     int bx = px + (pw - bw) / 2, by = py + ph - bh - ph / 40;
@@ -1299,8 +1309,46 @@ static void draw_shop(int px, int py, int pw, int ph)
               left >= 0 ? RGBC(170, 200, 255) : RGBC(255, 150, 140), font_small);
     ty += lh;
     draw_text(bx + pad, ty, l2, RGBC(255, 255, 255), font_small); ty += lh;
+    if (use[0]) { draw_text(bx + pad, ty, use, RGBC(140, 255, 150), font_small); ty += lh; }
     for (int i = 0; i < nr; i++) { draw_text(bx + pad, ty, rows[i], rcol[i], font_small); ty += lh; }
     tip_rect[0] = bx; tip_rect[1] = by; tip_rect[2] = bw; tip_rect[3] = bh;
+}
+
+/* monsters' HP in battle: a small list in the top right corner of the picture */
+static void draw_enemy_hp(int px, int py, int pw, int ph)
+{
+    (void)ph;
+    int ids[8], hp[8], mx[8];
+    int n = bestiary_battle(ids, hp, mx, 8);
+    if (n <= 0) return;
+    wchar_t nm[8][48]; int alive = 0, wname = 0;
+    for (int i = 0; i < n; i++) {
+        best_info_t b;
+        if (!emu_bestiary(ids[i], &b)) return;
+        MultiByteToWideChar(65001, 0, b.name, -1, nm[i], 48);
+        if (hp[i] > 0) { alive++; int w = text_w(nm[i], font_small); if (w > wname) wname = w; }
+    }
+    if (!alive) return;
+    int lh = font_h, pad = font_h / 3, barw = font_h * 4, numw = text_w(L"0000/0000", font_small);
+    int bw = pad * 3 + wname + font_h / 2 + barw + font_h / 2 + numw, bh = alive * lh + pad * 2;
+    int bx = px + pw - bw - font_h / 3, by = py + font_h / 3;
+    fill(bx, by, bw, bh, RGBC(150, 160, 200));
+    fill(bx + 1, by + 1, bw - 2, bh - 2, RGBC(10, 20, 60));
+    int ty = by + pad;
+    for (int i = 0; i < n; i++) {
+        if (hp[i] <= 0) continue;
+        int m = mx[i] > 0 ? mx[i] : hp[i];
+        draw_text(bx + pad, ty, nm[i], RGBC(230, 230, 255), font_small);
+        int x = bx + pad * 2 + wname + font_h / 2, yb = ty + lh / 3, hb = lh / 3;
+        int f = m ? barw * (hp[i] > m ? m : hp[i]) / m : 0;
+        DWORD col = hp[i] * 4 <= m ? RGBC(240, 80, 70) : hp[i] * 2 <= m ? RGBC(240, 200, 70) : RGBC(90, 220, 110);
+        fill(x, yb, barw, hb, RGBC(40, 40, 70));
+        if (f > 0) fill(x, yb, f, hb, col);
+        wchar_t t[24]; _snwprintf(t, 23, L"%d/%d", hp[i], m); t[23] = 0;
+        draw_text(x + barw + font_h / 2, ty, t, RGBC(200, 210, 240), font_small);
+        ty += lh;
+    }
+    hp_rect[0] = bx; hp_rect[1] = by; hp_rect[2] = bw; hp_rect[3] = bh;
 }
 
 static void toggle_fullscreen(void)
@@ -1335,7 +1383,7 @@ static void fit_window(void)
 /* ======================================================================
  * Overlay menu
  * ====================================================================== */
-enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP, M_HD, M_SAVE, M_STATS, M_BEST, M_ACH };
+enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP, M_HD, M_SAVE, M_STATS, M_BEST, M_ACH, M_SET, M_SOUND, M_HINTS };
 static int m_best_page, m_best_next = -1, m_best_ids[10];   /* bestiary page shown; index of the "next page" item */
 static int m_save_load;                     /* M_SAVE lists slots to load (1) or to save into (0) */
 static int m_page, m_sel, m_wait_bind = -1;   /* action index waiting for a key / pad input */
@@ -1360,13 +1408,8 @@ static void build_menu(void)
         add(L"Продолжить", 0);
         add(L"Сохранить", L"▸");
         add(L"Загрузить", L"▸");
-        add(L"Экран и графика", L"▸");
-        add(L"Скорость, сохранения, бои", L"▸");
-        add(L"Управление: клавиатура", L"▸");
-        add(L"Управление: геймпад", L"▸");
-        _snwprintf(v, 79, L"%d%%", C.volume); add(L"Громкость", v);
-        { static const wchar_t *tn[3] = { L"чистый", L"мягче", L"как старый телевизор" }; add(L"Звук", tn[C.tone]); }
-        add(L"Статистика", L"▸");
+        add(L"Настройки", L"▸");
+        add(L"Журнал: статистика, бестиарий, достижения", L"▸");
         add(L"Справка", L"▸");
         add(L"Выйти в главное меню", 0);
         add(m_confirm_quit ? L"Выйти? Нажмите ещё раз" : L"Выход", 0);
@@ -1399,7 +1442,7 @@ static void build_menu(void)
         add(L"Назад", 0);
         break; }
     case M_STATS: {
-        wcscpy(m_title, L"Статистика");
+        wcscpy(m_title, L"Журнал");
         static wchar_t a[80], b2[80], c[80], d[80], e[80];
         fmt_time(a, 79, ST.play_frames); add(L"Время в игре (всего)", a);
         fmt_time(b2, 79, session_frames); add(L"За этот запуск", b2);
@@ -1480,20 +1523,42 @@ static void build_menu(void)
         add(L"Открыть папку hdpack", 0);
         add(L"Назад", 0);
         break; }
+    case M_SET:
+        wcscpy(m_title, L"Настройки");
+        add(L"Экран и графика", L"▸");
+        add(L"Звук", L"▸");
+        add(L"Игра и бои", L"▸");
+        add(L"Подсказки", L"▸");
+        add(L"Управление: клавиатура", L"▸");
+        add(L"Управление: геймпад", L"▸");
+        add(L"Назад", 0);
+        break;
+    case M_SOUND: {
+        wcscpy(m_title, L"Звук");
+        _snwprintf(v, 79, L"%d%%", C.volume); add(L"Громкость", v);
+        { static const wchar_t *tn[3] = { L"чистый", L"мягче", L"как старый телевизор" }; add(L"Звучание", tn[C.tone]); }
+        { static const wchar_t *fs[3] = { L"музыка в обычном темпе", L"без звука", L"ускоренный" }; add(L"Звук при ускорении", fs[C.fast_sound]); }
+        add(L"Назад", 0);
+        break; }
+    case M_HINTS:
+        wcscpy(m_title, L"Подсказки");
+        add(L"Описания техник и навыков", onoff(C.tips));
+        add(L"Помощник в магазине и инвентаре", onoff(C.shop_help));
+        add(L"Здоровье монстров в бою", onoff(C.enemy_hp));
+        add(L"Назад", 0);
+        break;
     case M_SPEED: {
         static const wchar_t *bs[4] = { L"", L"выкл", L"×2", L"×3" };
-        wcscpy(m_title, L"Скорость, сохранения, бои");
+        wcscpy(m_title, L"Игра и бои");
         add(L"Ускорение боёв", bs[C.battle_speed]);
         _snwprintf(v, 79, L"×%d", C.turbo_speed); add(L"Ускорение по кнопке", v);
-        { static const wchar_t *fs[3] = { L"музыка в обычном темпе", L"без звука", L"ускоренный" }; add(L"Звук при ускорении", fs[C.fast_sound]); }
+        { static const wchar_t *tx[3] = { L"обычная", L"быстрая (×3)", L"очень быстрая (×8)" }; add(L"Скорость текста", tx[C.text_speed]); }
         add(L"Перемотка назад", onoff(C.rewind));
         if (C.autosave_min) _snwprintf(v, 79, L"каждые %d мин", C.autosave_min); else wcscpy(v, L"выкл");
         add(L"Автосохранение", v);
         { static const wchar_t *en[3] = { L"как в оригинале", L"реже (в 2–3 раза)", L"нет (сюжетные остаются)" }; add(L"Случайные бои", en[C.encounters]); }
         _snwprintf(v, 79, L"×%d", C.exp_mul); add(L"Опыт за бои", v);
         { wchar_t v2[20]; _snwprintf(v2, 19, L"×%d", C.mes_mul); add(L"Месеты за бои", v2); }
-        add(L"Описания техник и навыков", onoff(C.tips));
-        add(L"Помощник в магазинах", onoff(C.shop_help));
         add(L"Назад", 0);
         break; }
     case M_KEYS:
@@ -1795,7 +1860,7 @@ static void launcher_act(int i)
         case 0: { int ls = latest_slot(); if (ls >= 0 && state_load(ls)) { if (ls) C.slot = ls; launcher_start_game(); } } break;
         case 1: l_page = 1; l_load_sel = latest_slot() >= 0 ? latest_slot() : 1; break;
         case 2: emu_reset(); rw_clear(); launcher_start_game(); break;
-        case 3: menu_set_open(1); m_page = M_VIDEO; m_sel = 0; break;
+        case 3: menu_set_open(1); m_page = M_SET; m_sel = 0; break;
         case 4: quit = 1; break;
         }
     } else {
@@ -1896,22 +1961,35 @@ static void menu_act(int dir)
     int i = m_sel;
     logw("menu page %d item %d %s", m_page, i, dir ? (dir < 0 ? "left" : "right") : "select");
     if (m_page == M_MAIN) {
-        if (i != 12) m_confirm_quit = 0;
+        if (i != 7) m_confirm_quit = 0;
         switch (i) {
         case 0: if (!dir) menu_set_open(0); break;
         case 1: case 2:
             if (!dir) { slots_refresh(); m_save_load = i == 2; m_page = M_SAVE; m_sel = m_save_load ? C.slot : C.slot - 1; }
             break;
-        case 3: if (!dir) { m_page = M_VIDEO; m_sel = 0; } break;
-        case 4: if (!dir) { m_page = M_SPEED; m_sel = 0; } break;
-        case 5: if (!dir) { m_page = M_KEYS; m_sel = 0; } break;
-        case 6: if (!dir) { m_page = M_PAD; m_sel = 0; } break;
-        case 7: C.volume += (dir ? dir : 1) * 10; if (C.volume > 100) C.volume = dir ? 100 : 0; if (C.volume < 0) C.volume = 0; break;
-        case 8: C.tone = (C.tone + 3 + (dir ? dir : 1)) % 3; emu_set_audio_tone(C.tone); break;
-        case 9: if (!dir) { m_page = M_STATS; m_sel = 5; } break;
-        case 10: if (!dir) { m_page = M_HELP; m_sel = 0; } break;
-        case 11: if (!dir) { menu_set_open(0); launcher_reopen(); } break;
-        case 12: if (!dir) { if (m_confirm_quit) quit = 1; else m_confirm_quit = 1; } break;
+        case 3: if (!dir) { m_page = M_SET; m_sel = 0; } break;
+        case 4: if (!dir) { m_page = M_STATS; m_sel = 5; } break;
+        case 5: if (!dir) { m_page = M_HELP; m_sel = 0; } break;
+        case 6: if (!dir) { menu_set_open(0); launcher_reopen(); } break;
+        case 7: if (!dir) { if (m_confirm_quit) quit = 1; else m_confirm_quit = 1; } break;
+        }
+    } else if (m_page == M_SET) {
+        static const int to[6] = { M_VIDEO, M_SOUND, M_SPEED, M_HINTS, M_KEYS, M_PAD };
+        if (!dir) { if (i < 6) { m_page = to[i]; m_sel = 0; } else { m_page = M_MAIN; m_sel = 3; } }
+    } else if (m_page == M_SOUND) {
+        int d = dir ? dir : 1;
+        switch (i) {
+        case 0: C.volume += d * 10; if (C.volume > 100) C.volume = dir ? 100 : 0; if (C.volume < 0) C.volume = 0; break;
+        case 1: C.tone = (C.tone + 3 + d) % 3; emu_set_audio_tone(C.tone); break;
+        case 2: C.fast_sound = (C.fast_sound + 3 + d) % 3; break;
+        case 3: if (!dir) { m_page = M_SET; m_sel = 1; } break;
+        }
+    } else if (m_page == M_HINTS) {
+        switch (i) {
+        case 0: C.tips = !C.tips; break;
+        case 1: C.shop_help = !C.shop_help; break;
+        case 2: C.enemy_hp = !C.enemy_hp; break;
+        case 3: if (!dir) { m_page = M_SET; m_sel = 3; } break;
         }
     } else if (m_page == M_VIDEO) {
         int d = dir ? dir : 1;
@@ -1928,7 +2006,7 @@ static void menu_act(int dir)
         case 9: C.backdrop = !C.backdrop; break;
         case 10: C.cine = !C.cine; emu_set_cutscene_detect(C.cine); break;
         case 11: if (!dir) { m_page = M_HD; m_sel = 0; } break;
-        case 12: if (!dir) { m_page = M_MAIN; m_sel = 3; } break;
+        case 12: if (!dir) { m_page = M_SET; m_sel = 0; } break;
         }
     } else if (m_page == M_SPEED) {
         int d = dir ? dir : 1;
@@ -1936,15 +2014,13 @@ static void menu_act(int dir)
         switch (i) {
         case 0: C.battle_speed += d; if (C.battle_speed > 3) C.battle_speed = 1; if (C.battle_speed < 1) C.battle_speed = 3; break;
         case 1: { int k = 0; for (int j = 0; j < 4; j++) if (ts[j] == C.turbo_speed) k = j; k = (k + 4 + d) % 4; C.turbo_speed = ts[k]; break; }
-        case 2: C.fast_sound = (C.fast_sound + 3 + d) % 3; break;
+        case 2: C.text_speed = (C.text_speed + 3 + d) % 3; break;
         case 3: C.rewind = !C.rewind; rw_clear(); break;
         case 4: C.autosave_min = C.autosave_min == 0 ? (d > 0 ? 5 : 15) : C.autosave_min + 5 * d; if (C.autosave_min > 15 || C.autosave_min < 0) C.autosave_min = 0; break;
         case 5: C.encounters = (C.encounters + 3 + d) % 3; break;
         case 6: C.exp_mul = (C.exp_mul - 1 + 4 + d) % 4 + 1; break;
         case 7: C.mes_mul = (C.mes_mul - 1 + 4 + d) % 4 + 1; break;
-        case 8: C.tips = !C.tips; break;
-        case 9: C.shop_help = !C.shop_help; break;
-        case 10: if (!dir) { m_page = M_MAIN; m_sel = 4; } break;
+        case 8: if (!dir) { m_page = M_SET; m_sel = 2; } break;
         }
         emu_set_conveniences(C.encounters, C.exp_mul, C.mes_mul);
     } else if (m_page == M_PAD && i == NACT + 2) {
@@ -1958,13 +2034,13 @@ static void menu_act(int dir)
             if (m_page == M_KEYS) { uint16_t p[NACT][NPAD]; memcpy(p, save.pad, sizeof p); cfg_t d = C; C = save; memcpy(C.keys, d.keys, sizeof C.keys); }
             else { cfg_t d = C; C = save; memcpy(C.pad, d.pad, sizeof C.pad); }
             set_status(L"назначения сброшены");
-        } else { m_sel = m_page == M_KEYS ? 5 : 6; m_page = M_MAIN; }
+        } else { m_sel = m_page == M_KEYS ? 4 : 5; m_page = M_SET; }
     } else if (m_page == M_HELP) {
-        if (!dir) { m_page = M_MAIN; m_sel = 10; }
+        if (!dir) { m_page = M_MAIN; m_sel = 5; }
     } else if (m_page == M_STATS) {
         if (!dir && i == 5) { m_page = M_BEST; m_best_page = 0; m_sel = 0; }
         if (!dir && i == 6) { m_page = M_ACH; m_sel = NACH; }
-        if (!dir && i == 7) { m_page = M_MAIN; m_sel = 9; }
+        if (!dir && i == 7) { m_page = M_MAIN; m_sel = 4; }
     } else if (m_page == M_ACH) {
         if (!dir && i == NACH) { m_page = M_STATS; m_sel = 6; }
     } else if (m_page == M_BEST) {
@@ -2011,8 +2087,12 @@ static void menu_back(void)
     else if (m_page == M_HD) { m_page = M_VIDEO; m_sel = 11; }
     else if (m_page == M_BEST) { m_page = M_STATS; m_sel = 5; }
     else if (m_page == M_ACH) { m_page = M_STATS; m_sel = 6; }
+    else if (m_page == M_VIDEO || m_page == M_SOUND || m_page == M_SPEED || m_page == M_HINTS || m_page == M_KEYS || m_page == M_PAD) {
+        int from = m_page; m_page = M_SET;
+        m_sel = from == M_VIDEO ? 0 : from == M_SOUND ? 1 : from == M_SPEED ? 2 : from == M_HINTS ? 3 : from == M_KEYS ? 4 : 5;
+    }
     else { int from = m_page; m_page = M_MAIN;
-           m_sel = from == M_VIDEO ? 3 : from == M_SPEED ? 4 : from == M_KEYS ? 5 : from == M_PAD ? 6 : from == M_SAVE ? (m_save_load ? 2 : 1) : from == M_STATS ? 9 : 10; }
+           m_sel = from == M_SET ? 3 : from == M_SAVE ? (m_save_load ? 2 : 1) : from == M_STATS ? 4 : 5; }
 }
 
 /* keyboard in the menu */
@@ -2151,11 +2231,15 @@ static void game_frames(int fast)
     emu_set_pad(0, game_pad());
     int frames = fast ? C.turbo_speed : 1;
     if (!fast && C.battle_speed > 1 && emu_in_battle()) frames = C.battle_speed;
+    /* faster text: while a message is being typed out, run several frames per displayed one */
+    static int text_left;
+    if (C.text_speed && text_left > 0) { int t = C.text_speed == 1 ? 3 : 8; if (frames < t) frames = t; text_left--; }
     for (int i = 0; i < frames; i++) {
         /* speed-up: by default the sound runs only in the first emulated frame of each displayed
          * one, so the music keeps its tempo (some sound effects may be skipped) */
         emu_set_sound_hold(i > 0 && C.fast_sound == 0);
         emu_run_frame();
+        if (C.text_speed && emu_text_printing()) text_left = 4;
         frame_no++;
         stats_frame();
         cine_update();
@@ -2322,9 +2406,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.31");
+    diag_init(exe_dir, "0.32");
     diag_info = settings_info;
-    logw("start, version 0.31");
+    logw("start, version 0.32");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {

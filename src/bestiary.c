@@ -96,3 +96,18 @@ int bestiary_info(int id, best_info_t *b)
     bestiary_get(id, &b->seen, &b->killed);
     return 1;
 }
+
+int bestiary_battle(int *ids, int *hp, int *hpmax, int max)
+{
+    if (rw(0xEF00) != 0x14) return 0;
+    int n = 0;
+    for (int k = 0; k < 8 && n < max; k++) {
+        int id = g_ram[0x41F7 + 2 * k];
+        if (id == 0xFF) break;
+        uint32_t rec = 0x4200 + k * 0x80;
+        if (id >= BEST_MAX || rw(rec + 0x68) != id) continue;
+        ids[n] = id; hp[n] = (int16_t)rw(rec + 0x0E); hpmax[n] = (int16_t)rw(rec + 0x10);
+        n++;
+    }
+    return n;
+}
