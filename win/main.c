@@ -47,6 +47,7 @@ typedef struct {
     int32_t ws_battle;                     /* added in 0.14 */
     int32_t backdrop;                      /* added in 0.15: blurred picture in the side bars */
     int32_t cine;                          /* added in 0.16: picture-tube look for story pictures */
+    int32_t encounters, exp_mul, mes_mul;  /* added in 0.17 */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
@@ -58,6 +59,7 @@ typedef struct {
 #define CFG_V7_SIZE (offsetof(cfg_t, ws_battle))
 #define CFG_V8_SIZE (offsetof(cfg_t, backdrop))
 #define CFG_V9_SIZE (offsetof(cfg_t, cine))
+#define CFG_V10_SIZE (offsetof(cfg_t, encounters))
 static cfg_t C;
 
 /* pad input codes */
@@ -81,6 +83,7 @@ static void cfg_defaults(void)
     C.pad_mode = 0; C.vsync = 1; C.use_gl = 1;
     C.fx_mode = FX_PIXELS; C.fx_dither = 1; C.renderer = 0;
     C.hd_pack = 1; C.hd_auto = 0; C.ws_battle = 1; C.backdrop = 1; C.cine = 1;
+    C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1;
     static const uint16_t k[NACT][NKEY] = {
         { VK_UP, 'W' }, { VK_DOWN, 'S' }, { VK_LEFT, 'A' }, { VK_RIGHT, 'D' },
         { 'Z', 'J' }, { 'X', 'K' }, { 'C', VK_SPACE }, { VK_RETURN, 0 },
@@ -173,17 +176,21 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
         memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
         if (n < CFG_V4_SIZE && C.hd) C.fx_mode = FX_SMOOTH;
         if (n < CFG_V5_SIZE) C.renderer = C.use_gl ? 0 : 2;
         if (n < CFG_V8_SIZE) C.ws_battle = 1;
         if (n < CFG_V9_SIZE) C.backdrop = 1;
-        if (n < sizeof C) C.cine = 1;
+        if (n < CFG_V10_SIZE) C.cine = 1;
+        if (n < sizeof C) { C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; }
     }
     if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
     if (C.renderer < 0 || C.renderer > 2) C.renderer = 0;
     if (C.tone < 0 || C.tone > 2) C.tone = 0;
+    if (C.encounters < 0 || C.encounters > 2) C.encounters = 0;
+    if (C.exp_mul < 1 || C.exp_mul > 4) C.exp_mul = 1;
+    if (C.mes_mul < 1 || C.mes_mul > 4) C.mes_mul = 1;
     else if (n >= 20 + 1200 && *(uint32_t *)b == 0x31475043u)   /* version 1 file: keep the ROM path */
         memcpy(C.rom, b + 20, 1200);
     free(b);
@@ -1021,7 +1028,7 @@ static void build_menu(void)
         add(L"Сохранить", L"▸");
         add(L"Загрузить", L"▸");
         add(L"Экран и графика", L"▸");
-        add(L"Скорость, перемотка, автосохранение", L"▸");
+        add(L"Скорость, сохранения, бои", L"▸");
         add(L"Управление: клавиатура", L"▸");
         add(L"Управление: геймпад", L"▸");
         _snwprintf(v, 79, L"%d%%", C.volume); add(L"Громкость", v);
@@ -1099,12 +1106,15 @@ static void build_menu(void)
         break; }
     case M_SPEED: {
         static const wchar_t *bs[4] = { L"", L"выкл", L"×2", L"×3" };
-        wcscpy(m_title, L"Скорость и сохранения");
+        wcscpy(m_title, L"Скорость, сохранения, бои");
         add(L"Ускорение боёв", bs[C.battle_speed]);
         _snwprintf(v, 79, L"×%d", C.turbo_speed); add(L"Ускорение по кнопке", v);
         add(L"Перемотка назад", onoff(C.rewind));
         if (C.autosave_min) _snwprintf(v, 79, L"каждые %d мин", C.autosave_min); else wcscpy(v, L"выкл");
         add(L"Автосохранение", v);
+        { static const wchar_t *en[3] = { L"как в оригинале", L"реже (в 2–3 раза)", L"нет (сюжетные остаются)" }; add(L"Случайные бои", en[C.encounters]); }
+        _snwprintf(v, 79, L"×%d", C.exp_mul); add(L"Опыт за бои", v);
+        { wchar_t v2[20]; _snwprintf(v2, 19, L"×%d", C.mes_mul); add(L"Месеты за бои", v2); }
         add(L"Назад", 0);
         break; }
     case M_KEYS:
@@ -1260,8 +1270,12 @@ static void menu_act(int dir)
         case 1: { int k = 0; for (int j = 0; j < 4; j++) if (ts[j] == C.turbo_speed) k = j; k = (k + 4 + d) % 4; C.turbo_speed = ts[k]; break; }
         case 2: C.rewind = !C.rewind; rw_clear(); break;
         case 3: C.autosave_min = C.autosave_min == 0 ? (d > 0 ? 5 : 15) : C.autosave_min + 5 * d; if (C.autosave_min > 15 || C.autosave_min < 0) C.autosave_min = 0; break;
-        case 4: if (!dir) { m_page = M_MAIN; m_sel = 4; } break;
+        case 4: C.encounters = (C.encounters + 3 + d) % 3; break;
+        case 5: C.exp_mul = (C.exp_mul - 1 + 4 + d) % 4 + 1; break;
+        case 6: C.mes_mul = (C.mes_mul - 1 + 4 + d) % 4 + 1; break;
+        case 7: if (!dir) { m_page = M_MAIN; m_sel = 4; } break;
         }
+        emu_set_conveniences(C.encounters, C.exp_mul, C.mes_mul);
     } else if (m_page == M_PAD && i == NACT + 2) {
         C.pad_mode = (C.pad_mode + 3 + (dir ? dir : 1)) % 3;
         xi_user = joy_id = -1; xi_retry = joy_retry = 0;
@@ -1605,9 +1619,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.16");
+    diag_init(exe_dir, "0.17");
     diag_info = settings_info;
-    logw("start, version 0.16");
+    logw("start, version 0.17");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
@@ -1680,6 +1694,7 @@ static int run(void)
     audio_init();
     emu_set_audio_tone(C.tone);
     emu_set_cutscene_detect(C.cine);
+    emu_set_conveniences(C.encounters, C.exp_mul, C.mes_mul);
     stats_load();
     input_init();
     sram_read();

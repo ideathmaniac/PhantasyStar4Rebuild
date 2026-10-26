@@ -40,6 +40,8 @@ int  emu_in_battle(void);     /* Phantasy Star IV top-level mode $FFEF00 == $14 
 int  emu_on_field(void);
 int  emu_game_mode(void);
 void emu_set_audio_tone(int level);
+/* encounters: 0 normal, 1 half as often, 2 none; experience / meseta from battles x1..x8 */
+void emu_set_conveniences(int encounters, int exp_mult, int meseta_mult);
 int  emu_game_mode_top(void);         /* $FFEF00: $0C field, $14 battle */
 uint32_t emu_meseta(void);            /* money, $FFF438 */
 void emu_set_cutscene_detect(int on); /* run the field check every frame, also at 4:3 */

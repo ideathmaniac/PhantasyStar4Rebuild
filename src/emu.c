@@ -1,5 +1,6 @@
 #include <string.h>
 #include "emu.h"
+#include "qol.h"
 #include "cpu.h"
 #include "run.h"
 #include "sound.h"
@@ -82,7 +83,8 @@ void emu_reset(void)
 }
 
 void emu_set_pad(int port, uint16_t b) { if (port >= 0 && port < 2) g_pad[port] = b; }
-void emu_run_frame(void) { run_frame(); }
+void emu_run_frame(void) { run_frame(); if (rom_kind == EMU_ROM_RECOMPILED) qol_after_frame(); }
+void emu_set_conveniences(int encounters, int exp_mult, int meseta_mult) { qol_set(encounters, exp_mult, meseta_mult); }
 const uint32_t *emu_framebuffer(int *w, int *h) { *w = g_fb_width; *h = MD_VIS_LINES; return &g_fb[0][0]; }   /* pitch MD_W_MAX */
 int emu_audio(int16_t *out, int max) { return snd_take(out, max); }
 
@@ -103,6 +105,7 @@ int emu_state_load(const uint8_t *in, size_t n)
     if (m != STATE_MAGIC || sz != emu_state_size() || n < sz) return 0;
     memcpy(&R, in + 8, sizeof R);
     md_state_load(in + 8 + sizeof R);
+    qol_resync();
     return 1;
 }
 

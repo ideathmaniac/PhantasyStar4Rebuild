@@ -11,6 +11,7 @@
 #include "run.h"
 #include "sound.h"
 #include "hdpack.h"
+#include "qol.h"
 #include <dirent.h>
 #include <sys/stat.h>
 
@@ -148,8 +149,10 @@ int main(int argc, char **argv)
     if (getenv("SNDMASK")) g_snd_mask = atoi(getenv("SNDMASK"));
     g_snd_enabled = wav != NULL || getenv("SND") != NULL;
     long frames = atol(argv[2]);
+    if (getenv("QOL")) { int e = 0, x = 1, m = 1; sscanf(getenv("QOL"), "%d,%d,%d", &e, &x, &m); qol_set(e, x, m); qol_resync(); }
     for (long f = 0; f < frames; f++) {
         run_frame();
+        if (getenv("QOL")) qol_after_frame();
         if (wav) { int16_t buf[4096]; int n; while ((n = snd_take(buf, 2048)) > 0) { fwrite(buf, 4, n, wav); wav_frames += n; } }
         if (log) {
             fprintf(log, "%llu c=%llu pc=%06X sr=%04X d=%08X %08X %08X %08X %08X %08X %08X %08X a=%08X %08X %08X %08X %08X %08X %08X %08X ram=%08X vram=%08X cram=%08X\n",
@@ -184,6 +187,10 @@ int main(int argc, char **argv)
                 lastk = g_ws_cutscene;
                 if (outdir) { char p[512]; snprintf(p, sizeof p, "%s/k%06ld_%d.ppm", outdir, f + 1, lastk); save_ppm(p); }
             }
+        }
+        if (getenv("ENC_LOG")) {
+            static int ls = -1;
+            if (g_ram[0xECE3] != ls) { ls = g_ram[0xECE3]; fprintf(stderr, "step %d enc %d mode %02X\n", ls, g_ram[0xECE4], g_ram[0xEF01]); }
         }
         if (getenv("MODE_LOG")) {                    /* top-level game mode changes */
             static int lastm = -1; int m = (g_ram[0xEF00] << 8) | g_ram[0xEF01];
