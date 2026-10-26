@@ -47,6 +47,7 @@ int  emu_game_mode_top(void);         /* $FFEF00: $0C field, $14 battle */
 uint32_t emu_meseta(void);            /* money, $FFF438 */
 void emu_set_cutscene_detect(int on); /* run the field check every frame, also at 4:3 */
 int  emu_is_cutscene(void);           /* last frame: neither the field nor a battle (story pictures, title) */  /* 0 clean, 1 softer, 2 like an old TV */     /* $FFEC20 */
+void emu_set_sound_hold(int on);  /* 1: the Z80 and sound chips do not advance (speed-up frames after the first) */
 struct tip_s;
 struct shop_s;
 const uint8_t *emu_work_ram(void);   /* the 64 KB work RAM ($FF0000) */

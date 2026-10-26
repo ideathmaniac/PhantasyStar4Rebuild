@@ -90,6 +90,7 @@ void emu_run_frame(void) { run_frame(); if (rom_kind == EMU_ROM_RECOMPILED) { qo
 void emu_set_conveniences(int encounters, int exp_mult, int meseta_mult) { qol_set(encounters, exp_mult, meseta_mult); }
 const uint32_t *emu_framebuffer(int *w, int *h) { *w = g_fb_width; *h = MD_VIS_LINES; return &g_fb[0][0]; }   /* pitch MD_W_MAX */
 int emu_audio(int16_t *out, int max) { return snd_take(out, max); }
+void emu_set_sound_hold(int on) { g_snd_hold = on; }
 
 #define STATE_MAGIC 0x34535031u   /* "1PS4" */
 size_t emu_state_size(void) { return 8 + sizeof R + md_state_size(); }

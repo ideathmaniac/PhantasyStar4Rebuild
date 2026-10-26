@@ -155,6 +155,7 @@ int main(int argc, char **argv)
     long frames = atol(argv[2]);
     if (getenv("QOL")) { int e = 0, x = 1, m = 1; sscanf(getenv("QOL"), "%d,%d,%d", &e, &x, &m); qol_set(e, x, m); qol_resync(); }
     for (long f = 0; f < frames; f++) {
+        if (getenv("SND_HOLD") && atoi(getenv("SND_HOLD")) > 0) g_snd_hold = f % atoi(getenv("SND_HOLD")) != 0;   /* speed-up sound test */
         run_frame();
         if (getenv("QOL")) qol_after_frame();
         bestiary_after_frame();

@@ -9,6 +9,7 @@
 
 int g_snd_enabled = 1;
 int g_snd_mask;
+int g_snd_hold;   /* 1: the sound chips and the Z80 stand still (extra frames of a speed-up) */
 static z80_t Z;
 static uint32_t z80_bank;              /* 9-bit bank, address bits 15-23 */
 static int z80_cyc_debt;               /* Z80 cycles owed (fractional per line) */
@@ -69,6 +70,7 @@ static int z80_was_reset = 1;
 
 void snd_run_line(void)
 {
+    if (g_snd_hold) return;
     /* Z80: 3420 master clocks per line / 15 = 228 cycles */
     if (!g_z80_reset) { z80_was_reset = 1; }
     else {

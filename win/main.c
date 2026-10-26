@@ -24,7 +24,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.30"
+#define APP_VERSION_W L"v0.31"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -55,6 +55,7 @@ typedef struct {
     int32_t encounters, exp_mul, mes_mul;  /* added in 0.17 */
     int32_t tips;                          /* added in 0.19: technique descriptions */
     int32_t shop_help;                     /* added in 0.27: shop comparison panel */
+    int32_t fast_sound;                    /* added in 0.31: sound during speed-ups: 0 normal tempo, 1 off, 2 sped up */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
@@ -69,6 +70,7 @@ typedef struct {
 #define CFG_V10_SIZE (offsetof(cfg_t, encounters))
 #define CFG_V11_SIZE (offsetof(cfg_t, tips))
 #define CFG_V12_SIZE (offsetof(cfg_t, shop_help))
+#define CFG_V13_SIZE (offsetof(cfg_t, fast_sound))
 static cfg_t C;
 
 /* pad input codes */
@@ -185,7 +187,7 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE || n == CFG_V13_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
         memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
         if (n < CFG_V4_SIZE && C.hd) C.fx_mode = FX_SMOOTH;
         if (n < CFG_V5_SIZE) C.renderer = C.use_gl ? 0 : 2;
@@ -194,7 +196,8 @@ static void cfg_load(void)
         if (n < CFG_V10_SIZE) C.cine = 1;
         if (n < CFG_V11_SIZE) { C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; }
         if (n < CFG_V12_SIZE) C.tips = 1;
-        if (n < sizeof C) C.shop_help = 1;
+        if (n < CFG_V13_SIZE) C.shop_help = 1;
+        if (n < sizeof C) C.fast_sound = 0;
     } else if (n >= 20 + 1200 && *(uint32_t *)b == 0x31475043u)   /* version 1 file: keep the ROM path */
         memcpy(C.rom, b + 20, 1200);
     if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
@@ -205,6 +208,7 @@ static void cfg_load(void)
     if (C.mes_mul < 1 || C.mes_mul > 4) C.mes_mul = 1;
     C.tips = C.tips != 0;
     C.shop_help = C.shop_help != 0;
+    if (C.fast_sound < 0 || C.fast_sound > 2) C.fast_sound = 0;
     free(b);
 }
 
@@ -1481,6 +1485,7 @@ static void build_menu(void)
         wcscpy(m_title, L"Скорость, сохранения, бои");
         add(L"Ускорение боёв", bs[C.battle_speed]);
         _snwprintf(v, 79, L"×%d", C.turbo_speed); add(L"Ускорение по кнопке", v);
+        { static const wchar_t *fs[3] = { L"музыка в обычном темпе", L"без звука", L"ускоренный" }; add(L"Звук при ускорении", fs[C.fast_sound]); }
         add(L"Перемотка назад", onoff(C.rewind));
         if (C.autosave_min) _snwprintf(v, 79, L"каждые %d мин", C.autosave_min); else wcscpy(v, L"выкл");
         add(L"Автосохранение", v);
@@ -1931,14 +1936,15 @@ static void menu_act(int dir)
         switch (i) {
         case 0: C.battle_speed += d; if (C.battle_speed > 3) C.battle_speed = 1; if (C.battle_speed < 1) C.battle_speed = 3; break;
         case 1: { int k = 0; for (int j = 0; j < 4; j++) if (ts[j] == C.turbo_speed) k = j; k = (k + 4 + d) % 4; C.turbo_speed = ts[k]; break; }
-        case 2: C.rewind = !C.rewind; rw_clear(); break;
-        case 3: C.autosave_min = C.autosave_min == 0 ? (d > 0 ? 5 : 15) : C.autosave_min + 5 * d; if (C.autosave_min > 15 || C.autosave_min < 0) C.autosave_min = 0; break;
-        case 4: C.encounters = (C.encounters + 3 + d) % 3; break;
-        case 5: C.exp_mul = (C.exp_mul - 1 + 4 + d) % 4 + 1; break;
-        case 6: C.mes_mul = (C.mes_mul - 1 + 4 + d) % 4 + 1; break;
-        case 7: C.tips = !C.tips; break;
-        case 8: C.shop_help = !C.shop_help; break;
-        case 9: if (!dir) { m_page = M_MAIN; m_sel = 4; } break;
+        case 2: C.fast_sound = (C.fast_sound + 3 + d) % 3; break;
+        case 3: C.rewind = !C.rewind; rw_clear(); break;
+        case 4: C.autosave_min = C.autosave_min == 0 ? (d > 0 ? 5 : 15) : C.autosave_min + 5 * d; if (C.autosave_min > 15 || C.autosave_min < 0) C.autosave_min = 0; break;
+        case 5: C.encounters = (C.encounters + 3 + d) % 3; break;
+        case 6: C.exp_mul = (C.exp_mul - 1 + 4 + d) % 4 + 1; break;
+        case 7: C.mes_mul = (C.mes_mul - 1 + 4 + d) % 4 + 1; break;
+        case 8: C.tips = !C.tips; break;
+        case 9: C.shop_help = !C.shop_help; break;
+        case 10: if (!dir) { m_page = M_MAIN; m_sel = 4; } break;
         }
         emu_set_conveniences(C.encounters, C.exp_mul, C.mes_mul);
     } else if (m_page == M_PAD && i == NACT + 2) {
@@ -2146,6 +2152,9 @@ static void game_frames(int fast)
     int frames = fast ? C.turbo_speed : 1;
     if (!fast && C.battle_speed > 1 && emu_in_battle()) frames = C.battle_speed;
     for (int i = 0; i < frames; i++) {
+        /* speed-up: by default the sound runs only in the first emulated frame of each displayed
+         * one, so the music keeps its tempo (some sound effects may be skipped) */
+        emu_set_sound_hold(i > 0 && C.fast_sound == 0);
         emu_run_frame();
         frame_no++;
         stats_frame();
@@ -2153,8 +2162,12 @@ static void game_frames(int fast)
         if (C.rewind && (frame_no & 1)) rw_push();
         int n;
         while ((n = emu_audio(snd, 4096)) > 0)
-            if (i == 0) audio_push(snd, n);
+            if (i == 0) {
+                if (frames > 1 && C.fast_sound == 1) memset(snd, 0, (size_t)n * 4);   /* silence, still paced */
+                audio_push(snd, n);
+            }
     }
+    emu_set_sound_hold(0);
     if (C.hd_auto) hd_auto_capture();
     present();
     static int last_mode = -1;
@@ -2309,9 +2322,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.30");
+    diag_init(exe_dir, "0.31");
     diag_info = settings_info;
-    logw("start, version 0.30");
+    logw("start, version 0.31");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {

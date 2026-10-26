@@ -30,6 +30,7 @@ size_t snd_state_size(void);
 void snd_state_save(uint8_t *out);
 void snd_state_load(const uint8_t *in);
 extern int g_snd_enabled;
+extern int g_snd_hold;   /* skip the Z80 and the sound chips: music keeps its own tempo during speed-ups */
 extern int g_snd_mask;              /* debug: bit0 mute FM, bit1 mute DAC, bit2 mute PSG */           /* 0: skip sound generation (lockstep tests) */
 
 void snd_set_tone(int level);   /* 0 clean, 1 softer, 2 muffled (old TV) */
