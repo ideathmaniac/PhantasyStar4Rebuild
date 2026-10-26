@@ -196,7 +196,7 @@ int main(int argc, char **argv)
             if (strcmp(key, last)) {
                 strcpy(last, key);
                 if (key[0]) fprintf(stderr, "frame %ld: %s %s | cost %d | %s | power %d | %s %s\n", f + 1, t.skill ? "skill" : "tech",
-                                    t.name, t.cost, t.target, t.power, t.desc, t.note);
+                                    t.name, t.cost, t.target, t.power, t.desc, t.note), t.combo[0] ? fprintf(stderr, "    combo: %s\n", t.combo) : 0;
                 else fprintf(stderr, "frame %ld: (no list)\n", f + 1);
             }
         }

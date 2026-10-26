@@ -23,7 +23,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.21"
+#define APP_VERSION_W L"v0.22"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -1054,11 +1054,21 @@ static void draw_tip(int px, int py, int pw, int ph)
         size_t l = wcslen(line3);
         _snwprintf(line3 + l, 199 - l, L"%lsМощность: %ls", l ? L"     " : L"", st);
     }
+    /* combination attacks: one line each ("Ураган огня: + ЗАН или БУРЯ") */
+    wchar_t combo[400], *cl[4]; int ncl = 0;
+    MultiByteToWideChar(65001, 0, shown.combo, -1, combo, 400);
+    for (wchar_t *c = combo; *c && ncl < 4; ) {
+        cl[ncl++] = c;
+        wchar_t *e = wcsstr(c, L"; ");
+        if (!e) break;
+        *e = 0; c = e + 2;
+    }
     int lh = font_h * 6 / 5, pad = font_h / 2;
-    int lines = 2 + (line3[0] != 0) + (note[0] != 0);
+    int lines = 2 + (line3[0] != 0) + (note[0] != 0) + ncl;
     int bw = pw * 9 / 10, bh = lines * lh + pad * 2;
     int need = text_w(desc, font_small) + pad * 2;
     if (note[0] && text_w(note, font_small) + pad * 2 > need) need = text_w(note, font_small) + pad * 2;
+    for (int i = 0; i < ncl; i++) { wchar_t b[420]; _snwprintf(b, 419, L"◆ Комбо %ls", cl[i]); b[419] = 0; if (text_w(b, font_small) + pad * 2 > need) need = text_w(b, font_small) + pad * 2; }
     if (need > bw) bw = need < pw ? need : pw;
     int bx = px + (pw - bw) / 2;
     int by = emu_in_battle() ? py + ph / 40 : py + ph - bh - ph / 40;
@@ -1070,7 +1080,11 @@ static void draw_tip(int px, int py, int pw, int ph)
     ty += lh;
     draw_text(bx + pad, ty, desc, RGBC(255, 255, 255), font_small); ty += lh;
     if (line3[0]) { draw_text(bx + pad, ty, line3, RGBC(170, 200, 255), font_small); ty += lh; }
-    if (note[0]) draw_text(bx + pad, ty, note, RGBC(170, 200, 255), font_small);
+    if (note[0]) { draw_text(bx + pad, ty, note, RGBC(170, 200, 255), font_small); ty += lh; }
+    for (int i = 0; i < ncl; i++) {
+        wchar_t b[420]; _snwprintf(b, 419, L"◆ Комбо %ls", cl[i]); b[419] = 0;
+        draw_text(bx + pad, ty, b, RGBC(255, 200, 120), font_small); ty += lh;
+    }
     tip_rect[0] = bx; tip_rect[1] = by; tip_rect[2] = bw; tip_rect[3] = bh;
 }
 
@@ -2012,9 +2026,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.21");
+    diag_init(exe_dir, "0.22");
     diag_info = settings_info;
-    logw("start, version 0.21");
+    logw("start, version 0.22");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {

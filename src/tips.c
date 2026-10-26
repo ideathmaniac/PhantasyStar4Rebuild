@@ -137,6 +137,109 @@ static uint32_t name_addr(int i)
     return (i >= 0 && i < NTECH + NSKILL) ? addr[i] : 0;
 }
 
+
+/* Combination attacks (the party's macro uses them in order), after the
+ * squarefaction.ru article "Макросы, техники и навыки в русской версии
+ * Phantasy Star IV". Members are indices into the name/property tables
+ * (techniques 0-39, skills 40+); a group lists interchangeable entries. */
+typedef struct { const char *label; short idx[4]; } cgroup;
+static const cgroup G[] = {
+    { "ФОЙ", { 0, 1, 2, -1 } },      /* 0 */
+    { "ЗАН", { 9, 10, 11, -1 } },    /* 1 */
+    { "БУРЯ", { 49, 89, -1 } },      /* 2 */
+    { "ФЛАЕЛИ", { 43, 88, -1 } },    /* 3 */
+    { "ВАТ", { 3, 4, 5, -1 } },      /* 4 */
+    { "ВОЛНЫ", { 56, -1 } },         /* 5 */
+    { "ПОЛОСА (Чаз)", { 47, -1 } },  /* 6 */
+    { "ФОЙ", { 0, -1 } },            /* 7 base tiers only */
+    { "ВАТ", { 3, -1 } },            /* 8 */
+    { "ТСУ", { 6, -1 } },            /* 9 */
+    { "КРЕСТ", { 40, -1 } },         /* 10 */
+    { "ЭФЕСС", { 51, -1 } },         /* 11 */
+    { "ЗАЛП", { 53, -1 } },          /* 12 */
+    { "ФОЙ+2", { 2, -1 } },          /* 13 */
+    { "РАСКОЛ", { 41, -1 } },        /* 14 */
+    { "АСТРАЛ", { 46, -1 } },        /* 15 */
+    { "СМЕРТЬ", { 60, 63, 65, -1 } },/* 16 */
+    { "ИЛЛЮЗИЯ", { 67, -1 } },       /* 17 */
+    { "СТЕРЕТЬ", { 66, -1 } },       /* 18 */
+    { "ГРА+2", { 14, -1 } },         /* 19 */
+    { "ПОМЕХИ", { 71, -1 } },        /* 20 */
+    { "ТАНДЕМ", { 50, 90, -1 } },    /* 21 */
+    { "ВАЛ+1", { 18, -1 } },         /* 22 */
+    { "ДИЕМ", { 61, -1 } },          /* 23 */
+    { "МОЛИТВА", { 64, -1 } },       /* 24 */
+    { "ДЕБАН", { 31, -1 } },         /* 25 */
+    { "МЕГИД", { 15, -1 } },         /* 26 */
+    { "ЛЕГИОН", { 52, -1 } },        /* 27 */
+    { "ШКВАЛ", { 54, -1 } },         /* 28 */
+    { "ВАТ+2", { 5, -1 } },          /* 29 */
+};
+typedef struct { const char *name, *cond; signed char g[4]; } calt;   /* g: groups in macro order, -1 ends */
+static const calt CA[] = {
+    { "Ураган огня", 0, { 1, 0, -1 } }, { "Ураган огня", 0, { 0, 2, -1 } },
+    { "Ураган огня", 0, { 3, 1, -1 } }, { "Ураган огня", 0, { 3, 2, -1 } },
+    { "Метель", 0, { 4, 1, -1 } }, { "Метель", 0, { 4, 2, -1 } },
+    { "Волна", 0, { 5, 6, -1 } },
+    { "Три стихии", "только ФОЙ, ВАТ, ТСУ без +1/+2", { 8, 7, 9, -1 } },
+    { "Рубка", 0, { 10, 11, -1 } },
+    { "Звезда", 0, { 12, 13, -1 } },
+    { "Пароудар", 0, { 14, 15, -1 } },
+    { "Последний образ", 0, { 16, 17, -1 } },
+    { "Чёрная дыра", 0, { 18, 19, -1 } },
+    { "Перелом", "против машин", { 20, 21, -1 } },
+    { "Холокост", "против живых врагов", { 22, 23, -1 } },
+    { "Свет небес", 0, { 24, 11, -1 } },
+    { "Разрушение", "строго по порядку", { 25, 26, 27, 28 } },
+    { "Удар грома", 0, { 29, 21, -1 } },
+};
+
+static int in_group(int g, int idx)
+{
+    for (int k = 0; k < 4 && G[g].idx[k] >= 0; k++) if (G[g].idx[k] == idx) return 1;
+    return 0;
+}
+
+/* "Ураган огня: + ЗАН или БУРЯ; Метель: + ВАТ" for entry idx */
+static void combos_for(int idx, char *out, int n)
+{
+    int k = 0; out[0] = 0;
+    const char *done[8]; int nd = 0;
+    for (size_t a = 0; a < sizeof CA / sizeof CA[0]; a++) {
+        int seen = 0;
+        for (int d = 0; d < nd; d++) if (done[d] == CA[a].name) seen = 1;
+        if (seen) continue;
+        /* all variants of this combination that include idx */
+        char parts[4][120]; int np = 0; const char *cond = 0;
+        for (size_t b = a; b < sizeof CA / sizeof CA[0]; b++) {
+            if (strcmp(CA[b].name, CA[a].name)) continue;
+            int mine = -1;
+            for (int j = 0; j < 4 && CA[b].g[j] >= 0; j++) if (in_group(CA[b].g[j], idx)) mine = j;
+            if (mine < 0) continue;
+            char part[120]; int pl = 0;
+            for (int j = 0; j < 4 && CA[b].g[j] >= 0; j++) {
+                if (j == mine) continue;
+                pl += snprintf(part + pl, sizeof part - pl, "%s%s", pl ? " + " : "", G[(int)CA[b].g[j]].label);
+            }
+            if (CA[b].g[2] >= 0) {   /* longer macros: the whole chain in order */
+                pl = 0;
+                for (int j = 0; j < 4 && CA[b].g[j] >= 0; j++)
+                    pl += snprintf(part + pl, sizeof part - pl, "%s%s", pl ? " → " : "", G[(int)CA[b].g[j]].label);
+            }
+            int dup = 0;
+            for (int q = 0; q < np; q++) if (!strcmp(parts[q], part)) dup = 1;
+            if (!dup && np < 4) snprintf(parts[np++], 120, "%s", part);
+            if (CA[b].cond) cond = CA[b].cond;
+        }
+        if (!np) continue;
+        if (nd < 8) done[nd++] = CA[a].name;
+        k += snprintf(out + k, n - k, "%s%s: %s", k ? "; " : "", CA[a].name, CA[a].g[2] >= 0 ? "" : "+ ");
+        for (int q = 0; q < np && k < n; q++) k += snprintf(out + k, n - k, "%s%s", q ? " или " : "", parts[q]);
+        if (cond && k < n) k += snprintf(out + k, n - k, " (%s)", cond);
+        if (k >= n) { out[n - 1] = 0; break; }
+    }
+}
+
 static int fill(tip_t *t, int skill, int id /* 0-based within its kind */)
 {
     int idx = skill ? NTECH + id : id;
@@ -183,6 +286,7 @@ static int fill(tip_t *t, int skill, int id /* 0-based within its kind */)
     else if (eff == 0x12 || eff == 0x15 || eff == 0x16) note = "Не действует на андроидов (Рен, Деми).";
     else if (id < 38) note = "Не промахивается.";
     if (note) snprintf(t->note, sizeof t->note, "%s", note);
+    combos_for(idx, t->combo, sizeof t->combo);
     return 1;
 }
 

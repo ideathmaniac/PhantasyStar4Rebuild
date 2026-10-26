@@ -38,6 +38,7 @@ wcslen
 wcscpy
 wcscat
 wcsrchr
+wcsstr
 _wcsicmp
 sin
 cos
