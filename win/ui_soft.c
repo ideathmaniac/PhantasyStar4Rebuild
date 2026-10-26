@@ -184,18 +184,35 @@ void ui_backdrop(const uint32_t *fb, int fw, int fh, int fp, uint32_t *out, int 
     free(r); free(t);
 }
 
+static int ui_is_gold(uint32_t c)   /* the logo's gold, orange and brown shades */
+{
+    int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+    return r >= 140 && r >= g && b < 100;
+}
 uint8_t *ui_logo(const uint32_t *fb, int fw, int fh, int fp, int *lw, int *lh)
 {
-    /* the gold title letters of the title screen, rows 40-121, columns 100-299 */
-    int x0 = 100, y0 = 40, w = 200, h = 82, gold = 0;
+    /* the title letters of the title screen (rows 56-127, columns 97-225 on
+     * the Russian title), with their dark outline and white glints */
+    int x0 = 88, y0 = 50, w = 152, h = 84, gold = 0;
     if (fw < x0 + w || fh < y0 + h) return 0;
     uint8_t *o = calloc((size_t)w * h, 4);
     for (int y = 0; y < h; y++)
         for (int x = 0; x < w; x++) {
             uint32_t c = fb[(size_t)(y0 + y) * fp + x0 + x];
-            int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+            int in = ui_is_gold(c);
+            if (!in && (c & 0xFFFFFF) == 0xFFFFFF) {   /* a white glint inside a letter */
+                int n = 0;
+                if (x > 0) n += ui_is_gold(fb[(size_t)(y0 + y) * fp + x0 + x - 1]);
+                if (x + 1 < w) n += ui_is_gold(fb[(size_t)(y0 + y) * fp + x0 + x + 1]);
+                if (y > 0) n += ui_is_gold(fb[(size_t)(y0 + y - 1) * fp + x0 + x]);
+                if (y + 1 < h) n += ui_is_gold(fb[(size_t)(y0 + y + 1) * fp + x0 + x]);
+                in = n >= 1;
+            }
+            if (!in) continue;
             uint8_t *p = o + ((size_t)y * w + x) * 4;
-            if (r + g > 260 && r > b + 30) { p[0] = (uint8_t)r; p[1] = (uint8_t)g; p[2] = (uint8_t)b; p[3] = 255; gold++; }
+            p[0] = (uint8_t)(c >> 16); p[1] = (uint8_t)(c >> 8); p[2] = (uint8_t)c; p[3] = 255;
+            int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+            if (r + g > 260 && r > b + 30) gold++;   /* the bright gold decides whether this is the title */
         }
     if (gold < 800) { free(o); return 0; }            /* not the title screen */
     *lw = w; *lh = h;
