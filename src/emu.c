@@ -151,6 +151,8 @@ int emu_game_mode_top(void) { return (g_ram[0xEF00] << 8) | g_ram[0xEF01]; }
 uint32_t emu_meseta(void) { return ((uint32_t)g_ram[0xF438] << 24) | ((uint32_t)g_ram[0xF439] << 16) | ((uint32_t)g_ram[0xF43A] << 8) | g_ram[0xF43B]; }
 void emu_set_cutscene_detect(int on) { extern int g_ws_probe; if (on) g_ws_probe = 1; }   /* already on for the recompiled ROM (emu_on_field) */
 const uint8_t *emu_work_ram(void) { return g_ram; }
+void emu_set_fog(int on) { extern int g_fog_on; g_fog_on = on; }
+uint8_t *emu_fog_data(int *size) { uint8_t *ps4_fog_data(int *size); return ps4_fog_data(size); }
 int emu_minimap(uint32_t *out, int w, int h, int *mx, int *my)
 {
     int ps4_ws_minimap(uint32_t *out, int ow, int oh, int *mx, int *my, int *fw, int *fh);

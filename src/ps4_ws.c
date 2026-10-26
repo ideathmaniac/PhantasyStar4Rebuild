@@ -35,6 +35,7 @@ static int snap_valid, snap_wa, snap_ha, snap_wb, snap_hb, snap_maskb;
 static int cam_x, cam_y;                /* world position of screen (0,0) this frame */
 static int battle, battle_mirror;       /* this frame is a battle; its background is one screen wide */
 int ps4_field_live;                     /* last frame showed the field map unobstructed */
+static void fog_mark(void);
 static int ps4_field_live_any;          /* the field, maybe under windows */
 int g_ws_probe;                         /* run the field check even at 4:3 */
 int g_ws_battle = 1;                    /* widen battles too */
@@ -139,6 +140,7 @@ static int ws_classify(void)
         memcpy(snap_blocks, live_blocks, sizeof snap_blocks);
         snap_wa = wa; snap_ha = ha; snap_wb = wb; snap_hb = hb; snap_maskb = maskb;
         snap_valid = 1;
+        fog_mark();
         return 1;
     }
     if (!snap_valid) return 0;
@@ -200,6 +202,29 @@ void ps4_ws_install(void)
     snap_valid = 0;
 }
 
+/* ---- fog of war: the 32x32 blocks of each map seen so far ----
+ * Map number $FFEC28 (the loader at $05AFDE); up to 64x64 blocks per map. */
+#define FOG_MAPS 512
+static uint8_t fog[FOG_MAPS][512];
+int g_fog_on;
+static void fog_mark(void)
+{
+    int id = ramw(0xEC28);
+    if (id >= FOG_MAPS || snap_wa * snap_ha > 4096) return;   /* the world map is not fogged */
+    int w = snap_wa, h = snap_ha;
+    int cx = ramw(0xEF94), cy = ramw(0xEF90);
+    for (int by = (cy >> 5) - 1; by <= ((cy + 224) >> 5) + 1; by++)
+        for (int bx = (cx >> 5) - 1; bx <= ((cx + 320) >> 5) + 1; bx++)
+            if (bx >= 0 && by >= 0 && bx < w && by < h && bx < 64 && by < 64) fog[id][(by * 64 + bx) >> 3] |= (uint8_t)(1 << (bx & 7));
+}
+static int fog_seen(int id, int bx, int by)
+{
+    if (!g_fog_on || id >= FOG_MAPS) return 1;
+    if (bx < 0 || by < 0 || bx >= 64 || by >= 64) return 0;
+    return (fog[id][(by * 64 + bx) >> 3] >> (bx & 7)) & 1;
+}
+uint8_t *ps4_fog_data(int *size) { *size = sizeof fog; return &fog[0][0]; }
+
 /* ---- minimap: the field map around the party at 1/4 size ----
  * Each output pixel is one pixel of the map (plane A over plane B) sampled
  * every 4 world pixels; the party leader is object $FFC000 (x.w at +$30,
@@ -238,6 +263,7 @@ int ps4_ws_minimap(uint32_t *out, int ow, int oh, int *mx, int *my, int *full_w,
             int ta = map_tile(snap_maps, snap_blocks, 0, snap_wa, snap_ha, 0xBFFF, wx, wy);
             int tb = map_tile(snap_maps, snap_blocks, 1, snap_wb, snap_hb, snap_maskb, wx, wy);
             if (ta < 0 && tb < 0) { out[y * ow + x] = 0x000000; continue; }
+            if (!wraps && !fog_seen(ramw(0xEC28), wx >> 5, wy >> 5)) { out[y * ow + x] = 0x14141E; continue; }
             int op = 0;
             if (ta >= 0) c = tile_pixel(ta, wx & 7, wy & 7, &op);
             if (!op) { c = bd; if (tb >= 0) { int ob; uint32_t cb = tile_pixel(tb, wx & 7, wy & 7, &ob); if (ob) c = cb; } }

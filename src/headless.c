@@ -122,7 +122,7 @@ int main(int argc, char **argv)
         }
     }
     run_reset();
-    if (getenv("MINIMAP")) { extern int g_ws_probe; g_ws_probe = 1; }
+    if (getenv("MINIMAP")) { extern int g_ws_probe, g_fog_on; g_ws_probe = 1; g_fog_on = getenv("FOG") != 0; }
     if (getenv("SRAM_IN")) { FILE *sf = fopen(getenv("SRAM_IN"), "rb"); if (sf) { fread(g_sram, 1, sizeof g_sram, sf); fclose(sf); } }
 #ifdef PS4_RECOMP
     { void ps4_recomp_install(void); if (!getenv("INTERP_ONLY")) ps4_recomp_install(); }

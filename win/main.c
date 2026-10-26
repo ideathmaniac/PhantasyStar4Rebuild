@@ -24,7 +24,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.34"
+#define APP_VERSION_W L"v0.35"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -58,6 +58,7 @@ typedef struct {
     int32_t fast_sound;                    /* added in 0.31: sound during speed-ups: 0 normal tempo, 1 off, 2 sped up */
     int32_t enemy_hp, text_speed;          /* added in 0.32: monsters' HP in battle; text 0 normal, 1 fast, 2 very fast */
     int32_t minimap;                       /* added in 0.34: 0 off, 1 small, 2 large */
+    int32_t fog, fast_walk;                /* added in 0.35: minimap fog of war; walking 0 normal, 1 x2 holding B, 2 x2 always */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
@@ -75,6 +76,7 @@ typedef struct {
 #define CFG_V13_SIZE (offsetof(cfg_t, fast_sound))
 #define CFG_V14_SIZE (offsetof(cfg_t, enemy_hp))
 #define CFG_V15_SIZE (offsetof(cfg_t, minimap))
+#define CFG_V16_SIZE (offsetof(cfg_t, fog))
 static cfg_t C;
 
 /* pad input codes */
@@ -98,7 +100,7 @@ static void cfg_defaults(void)
     C.pad_mode = 0; C.vsync = 1; C.use_gl = 1;
     C.fx_mode = FX_PIXELS; C.fx_dither = 1; C.renderer = 0;
     C.hd_pack = 1; C.hd_auto = 0; C.ws_battle = 1; C.backdrop = 1; C.cine = 1;
-    C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; C.tips = 1; C.shop_help = 1; C.enemy_hp = 1; C.text_speed = 1; C.minimap = 1;
+    C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; C.tips = 1; C.shop_help = 1; C.enemy_hp = 1; C.text_speed = 1; C.minimap = 1; C.fog = 1; C.fast_walk = 1;
     static const uint16_t k[NACT][NKEY] = {
         { VK_UP, 'W' }, { VK_DOWN, 'S' }, { VK_LEFT, 'A' }, { VK_RIGHT, 'D' },
         { 'Z', 'J' }, { 'X', 'K' }, { 'C', VK_SPACE }, { VK_RETURN, 0 },
@@ -191,7 +193,7 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE || n == CFG_V13_SIZE || n == CFG_V14_SIZE || n == CFG_V15_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE || n == CFG_V13_SIZE || n == CFG_V14_SIZE || n == CFG_V15_SIZE || n == CFG_V16_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
         memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
         if (n < CFG_V4_SIZE && C.hd) C.fx_mode = FX_SMOOTH;
         if (n < CFG_V5_SIZE) C.renderer = C.use_gl ? 0 : 2;
@@ -203,7 +205,8 @@ static void cfg_load(void)
         if (n < CFG_V13_SIZE) C.shop_help = 1;
         if (n < CFG_V14_SIZE) C.fast_sound = 0;
         if (n < CFG_V15_SIZE) { C.enemy_hp = 1; C.text_speed = 1; }
-        if (n < sizeof C) C.minimap = 1;
+        if (n < CFG_V16_SIZE) C.minimap = 1;
+        if (n < sizeof C) { C.fog = 1; C.fast_walk = 1; }
     } else if (n >= 20 + 1200 && *(uint32_t *)b == 0x31475043u)   /* version 1 file: keep the ROM path */
         memcpy(C.rom, b + 20, 1200);
     if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
@@ -218,6 +221,8 @@ static void cfg_load(void)
     C.enemy_hp = C.enemy_hp != 0;
     if (C.text_speed < 0 || C.text_speed > 2) C.text_speed = 1;
     if (C.minimap < 0 || C.minimap > 2) C.minimap = 1;
+    C.fog = C.fog != 0;
+    if (C.fast_walk < 0 || C.fast_walk > 2) C.fast_walk = 1;
     free(b);
 }
 
@@ -282,6 +287,23 @@ static void best_load(void)
         l = strchr(l, '\n'); if (l) l++;
     }
     free(t);
+}
+static void fog_path(wchar_t *p) { path_in_exe_dir(p, L"saves\\PS4_minimap.bin"); }
+static void fog_load(void)
+{
+    wchar_t p[700]; fog_path(p);
+    size_t n = 0; uint8_t *b = read_file(p, &n);
+    int sz; uint8_t *f = emu_fog_data(&sz);
+    if (b && f && n == (size_t)sz) memcpy(f, b, n);
+    free(b);
+}
+static void fog_save(void)
+{
+    int sz; uint8_t *f = emu_fog_data(&sz);
+    if (!f) return;
+    saves_dir();
+    wchar_t p[700]; fog_path(p);
+    write_file(p, f, (size_t)sz);
 }
 static void best_save(void)
 {
@@ -1582,6 +1604,7 @@ static void build_menu(void)
         add(L"Помощник в магазине и инвентаре", onoff(C.shop_help));
         add(L"Здоровье монстров в бою", onoff(C.enemy_hp));
         { static const wchar_t *mm[3] = { L"выкл", L"маленькая", L"большая" }; add(L"Миникарта (клавиша M)", mm[C.minimap]); }
+        add(L"Миникарта: только пройденное", onoff(C.fog));
         add(L"Назад", 0);
         break;
     case M_SPEED: {
@@ -1590,6 +1613,7 @@ static void build_menu(void)
         add(L"Ускорение боёв", bs[C.battle_speed]);
         _snwprintf(v, 79, L"×%d", C.turbo_speed); add(L"Ускорение по кнопке", v);
         { static const wchar_t *tx[3] = { L"обычная", L"быстрая (×3)", L"очень быстрая (×8)" }; add(L"Скорость текста", tx[C.text_speed]); }
+        { static const wchar_t *fw[3] = { L"обычная", L"×2, пока зажата B", L"×2 всегда" }; add(L"Ходьба по карте", fw[C.fast_walk]); }
         add(L"Перемотка назад", onoff(C.rewind));
         if (C.autosave_min) _snwprintf(v, 79, L"каждые %d мин", C.autosave_min); else wcscpy(v, L"выкл");
         add(L"Автосохранение", v);
@@ -2027,7 +2051,8 @@ static void menu_act(int dir)
         case 1: C.shop_help = !C.shop_help; break;
         case 2: C.enemy_hp = !C.enemy_hp; break;
         case 3: C.minimap = (C.minimap + 3 + (dir ? dir : 1)) % 3; break;
-        case 4: if (!dir) { m_page = M_SET; m_sel = 3; } break;
+        case 4: C.fog = !C.fog; emu_set_fog(C.fog); break;
+        case 5: if (!dir) { m_page = M_SET; m_sel = 3; } break;
         }
     } else if (m_page == M_VIDEO) {
         int d = dir ? dir : 1;
@@ -2053,12 +2078,13 @@ static void menu_act(int dir)
         case 0: C.battle_speed += d; if (C.battle_speed > 3) C.battle_speed = 1; if (C.battle_speed < 1) C.battle_speed = 3; break;
         case 1: { int k = 0; for (int j = 0; j < 4; j++) if (ts[j] == C.turbo_speed) k = j; k = (k + 4 + d) % 4; C.turbo_speed = ts[k]; break; }
         case 2: C.text_speed = (C.text_speed + 3 + d) % 3; break;
-        case 3: C.rewind = !C.rewind; rw_clear(); break;
-        case 4: C.autosave_min = C.autosave_min == 0 ? (d > 0 ? 5 : 15) : C.autosave_min + 5 * d; if (C.autosave_min > 15 || C.autosave_min < 0) C.autosave_min = 0; break;
-        case 5: C.encounters = (C.encounters + 3 + d) % 3; break;
-        case 6: C.exp_mul = (C.exp_mul - 1 + 4 + d) % 4 + 1; break;
-        case 7: C.mes_mul = (C.mes_mul - 1 + 4 + d) % 4 + 1; break;
-        case 8: if (!dir) { m_page = M_SET; m_sel = 2; } break;
+        case 3: C.fast_walk = (C.fast_walk + 3 + d) % 3; break;
+        case 4: C.rewind = !C.rewind; rw_clear(); break;
+        case 5: C.autosave_min = C.autosave_min == 0 ? (d > 0 ? 5 : 15) : C.autosave_min + 5 * d; if (C.autosave_min > 15 || C.autosave_min < 0) C.autosave_min = 0; break;
+        case 6: C.encounters = (C.encounters + 3 + d) % 3; break;
+        case 7: C.exp_mul = (C.exp_mul - 1 + 4 + d) % 4 + 1; break;
+        case 8: C.mes_mul = (C.mes_mul - 1 + 4 + d) % 4 + 1; break;
+        case 9: if (!dir) { m_page = M_SET; m_sel = 2; } break;
         }
         emu_set_conveniences(C.encounters, C.exp_mul, C.mes_mul);
     } else if (m_page == M_PAD && i == NACT + 2) {
@@ -2278,6 +2304,9 @@ static void game_frames(int fast)
     int frames = fast ? C.turbo_speed : 1;
     if (!fast && C.battle_speed > 1 && emu_in_battle()) frames = C.battle_speed;
     /* faster text: while a message is being typed out, run several frames per displayed one */
+    /* faster walking on field maps: two frames per displayed one, music at its tempo */
+    if (!fast && C.fast_walk && frames < 2 && emu_on_field() && emu_game_mode_top() == 0x0C &&
+        (C.fast_walk == 2 || (game_pad() & PAD_B))) frames = 2;
     static int text_left;
     if (C.text_speed && text_left > 0) { int t = C.text_speed == 1 ? 3 : 8; if (frames < t) frames = t; text_left--; }
     for (int i = 0; i < frames; i++) {
@@ -2452,9 +2481,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.34");
+    diag_init(exe_dir, "0.35");
     diag_info = settings_info;
-    logw("start, version 0.34");
+    logw("start, version 0.35");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
@@ -2531,6 +2560,7 @@ static int run(void)
     stats_load();
     best_load();
     ach_load();
+    fog_load(); emu_set_fog(C.fog);
     input_init();
     sram_read();
     emu_reset();
@@ -2589,7 +2619,7 @@ static int run(void)
 
         if (emu_sram_dirty()) sram_pending = 1;
         if (sram_pending && frame_no % 120 == 0) { sram_write(); sram_pending = 0; stats_save(); }
-        if (frame_no % 1800 == 0) best_save();
+        if (frame_no % 1800 == 0) { best_save(); fog_save(); }
         if (frame_no % 30 == 0) ach_check();
         if (C.autosave_min && t - last_autosave > (uint64_t)C.autosave_min * 60000 && emu_on_field() && !emu_in_battle()) {
             state_save(0, 0);
@@ -2600,6 +2630,7 @@ static int run(void)
     if (C.autosave_min && !launcher_open) state_save(0, 1);   /* never over the real autosave from the launcher */
     stats_save();
     best_save();
+    fog_save();
     cfg_save();
     audio_close();
     DeleteFileW(marker);

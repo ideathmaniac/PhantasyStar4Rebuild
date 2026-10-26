@@ -54,7 +54,9 @@ struct shop_s;
 const uint8_t *emu_work_ram(void);
 /* the field map around the party at 1/4 size (w x h pixels) and the party at (*mx, *my);
  * 0 off the field, 1 the field under windows, 2 the field alone */
-int emu_minimap(uint32_t *out, int w, int h, int *mx, int *my);   /* the 64 KB work RAM ($FF0000) */
+int emu_minimap(uint32_t *out, int w, int h, int *mx, int *my);
+void emu_set_fog(int on);              /* minimap shows only the blocks seen so far */
+uint8_t *emu_fog_data(int *size);      /* the seen blocks of every map, to keep in a file */   /* the 64 KB work RAM ($FF0000) */
 #include "bestiary.h"
 int  emu_bestiary(int id, best_info_t *b);   /* monster id 0..BEST_MAX-1: data and counts, 0 if none */
 int  emu_shop(struct shop_s *s);       /* shop buy list: the highlighted item compared with the party (shop.h) */
