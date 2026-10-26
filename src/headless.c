@@ -13,6 +13,7 @@
 #include "hdpack.h"
 #include "qol.h"
 #include "tips.h"
+#include "shop.h"
 #include "md.h"
 #include <dirent.h>
 #include <sys/stat.h>
@@ -198,6 +199,20 @@ int main(int argc, char **argv)
                 if (key[0]) fprintf(stderr, "frame %ld: %s %s | cost %d | %s | power %d | %s %s\n", f + 1, t.skill ? "skill" : "tech",
                                     t.name, t.cost, t.target, t.power, t.desc, t.note), t.combo[0] ? fprintf(stderr, "    combo [%x]: %s\n", t.combo_ready, t.combo) : 0;
                 else fprintf(stderr, "frame %ld: (no list)\n", f + 1);
+            }
+        }
+        if (getenv("SHOP_LOG")) {                    /* shop helper */
+            static int last = -2; shop_t sh; int k = shop_current(&sh) ? sh.id : -1;
+            if (k != last) {
+                last = k;
+                if (k < 0) fprintf(stderr, "frame %ld: (no shop list)\n", f + 1);
+                else {
+                    fprintf(stderr, "frame %ld: %s | %s | atk %d def %d | %d mes (have %u) | in bag %d\n", f + 1, sh.name, sh.kind,
+                            sh.atk, sh.def, sh.price, sh.money, sh.owned);
+                    for (int i = 0; i < sh.nrow; i++)
+                        fprintf(stderr, "    %s: %s%s%s datk %+d ddef %+d\n", sh.row[i].who, sh.row[i].can ? "" : "НЕ МОЖЕТ ",
+                                sh.row[i].now, sh.row[i].same ? " (same)" : "", sh.row[i].datk, sh.row[i].ddef);
+                }
             }
         }
         if (getenv("ENC_LOG")) {

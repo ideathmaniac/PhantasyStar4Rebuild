@@ -48,6 +48,8 @@ uint32_t emu_meseta(void);            /* money, $FFF438 */
 void emu_set_cutscene_detect(int on); /* run the field check every frame, also at 4:3 */
 int  emu_is_cutscene(void);           /* last frame: neither the field nor a battle (story pictures, title) */  /* 0 clean, 1 softer, 2 like an old TV */     /* $FFEC20 */
 struct tip_s;
+struct shop_s;
+int  emu_shop(struct shop_s *s);       /* shop buy list: the highlighted item compared with the party (shop.h) */
 int  emu_skill_tip(struct tip_s *t);  /* technique / skill under the cursor of an open list (tips.h) */
 uint32_t emu_cpu_pc(void);   /* last 68000 instruction started */      /* the last frame showed the walkable field map, no windows */
 

@@ -32,6 +32,8 @@ recompiling the game's 68000 code to C. Targets the Russian fan translation
 - Pause menu with mouse, rebinding, XInput and DirectInput gamepads, rewind,
   fast-forward, battle speed-up, autosave, save slots with pictures and dates, play
   statistics, screenshots (F12).
+- Shop helper: the highlighted item compared with what each party member wears
+  (`src/shop.c`, from the game's item table and shop routine).
 - Technique and skill descriptions shown while the game's lists are open (battle and
   field), built from the game's own name and property tables (`src/tips.c`).
 - Crash and hang reports (crash.txt, minidump, hang.txt) for bug reports.
