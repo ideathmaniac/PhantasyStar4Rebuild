@@ -151,6 +151,11 @@ int emu_game_mode_top(void) { return (g_ram[0xEF00] << 8) | g_ram[0xEF01]; }
 uint32_t emu_meseta(void) { return ((uint32_t)g_ram[0xF438] << 24) | ((uint32_t)g_ram[0xF439] << 16) | ((uint32_t)g_ram[0xF43A] << 8) | g_ram[0xF43B]; }
 void emu_set_cutscene_detect(int on) { extern int g_ws_probe; if (on) g_ws_probe = 1; }   /* already on for the recompiled ROM (emu_on_field) */
 const uint8_t *emu_work_ram(void) { return g_ram; }
+int emu_minimap(uint32_t *out, int w, int h, int *mx, int *my)
+{
+    int ps4_ws_minimap(uint32_t *out, int ow, int oh, int *mx, int *my, int *fw, int *fh);
+    return rom_kind == EMU_ROM_RECOMPILED ? ps4_ws_minimap(out, w, h, mx, my, 0, 0) : 0;
+}
 int emu_bestiary(int id, best_info_t *b) { return rom_kind == EMU_ROM_RECOMPILED && bestiary_info(id, b); }
 int emu_shop(shop_t *s) { return rom_kind == EMU_ROM_RECOMPILED && (shop_current(s) || shop_inventory(s)); }
 int emu_skill_tip(tip_t *t) { return rom_kind == EMU_ROM_RECOMPILED && tips_current(t); }

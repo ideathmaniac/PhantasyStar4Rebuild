@@ -122,6 +122,7 @@ int main(int argc, char **argv)
         }
     }
     run_reset();
+    if (getenv("MINIMAP")) { extern int g_ws_probe; g_ws_probe = 1; }
     if (getenv("SRAM_IN")) { FILE *sf = fopen(getenv("SRAM_IN"), "rb"); if (sf) { fread(g_sram, 1, sizeof g_sram, sf); fclose(sf); } }
 #ifdef PS4_RECOMP
     { void ps4_recomp_install(void); if (!getenv("INTERP_ONLY")) ps4_recomp_install(); }
@@ -266,5 +267,14 @@ int main(int argc, char **argv)
         }
     }
     { extern unsigned long g_ym_w68, g_ym_wz80; if (getenv("YM_COUNT")) fprintf(stderr, "ym writes: 68k %lu, z80 %lu\n", g_ym_w68, g_ym_wz80); }
+    if (getenv("MINIMAP")) {   /* write the minimap of the last frame */
+        int ps4_ws_minimap(uint32_t *out, int ow, int oh, int *mx, int *my, int *fw, int *fh);
+        static uint32_t mm[160 * 120]; int mx, my, fw, fh;
+        if (ps4_ws_minimap(mm, 160, 120, &mx, &my, &fw, &fh)) {
+            FILE *o = fopen(getenv("MINIMAP"), "wb"); fprintf(o, "P6\n160 120\n255\n");
+            for (int k = 0; k < 160 * 120; k++) { int x = k % 160, y = k / 160; uint32_t c = (abs(x - mx) <= 1 && abs(y - my) <= 1) ? 0xFF0000 : mm[k]; fputc(c >> 16, o); fputc((c >> 8) & 255, o); fputc(c & 255, o); }
+            fclose(o); fprintf(stderr, "minimap: player %d,%d map %dx%d\n", mx, my, fw, fh);
+        } else fprintf(stderr, "minimap: not available\n");
+    }
     return 0;
 }

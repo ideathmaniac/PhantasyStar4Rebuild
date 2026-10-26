@@ -24,7 +24,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.33"
+#define APP_VERSION_W L"v0.34"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -57,6 +57,7 @@ typedef struct {
     int32_t shop_help;                     /* added in 0.27: shop comparison panel */
     int32_t fast_sound;                    /* added in 0.31: sound during speed-ups: 0 normal tempo, 1 off, 2 sped up */
     int32_t enemy_hp, text_speed;          /* added in 0.32: monsters' HP in battle; text 0 normal, 1 fast, 2 very fast */
+    int32_t minimap;                       /* added in 0.34: 0 off, 1 small, 2 large */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
@@ -73,6 +74,7 @@ typedef struct {
 #define CFG_V12_SIZE (offsetof(cfg_t, shop_help))
 #define CFG_V13_SIZE (offsetof(cfg_t, fast_sound))
 #define CFG_V14_SIZE (offsetof(cfg_t, enemy_hp))
+#define CFG_V15_SIZE (offsetof(cfg_t, minimap))
 static cfg_t C;
 
 /* pad input codes */
@@ -96,7 +98,7 @@ static void cfg_defaults(void)
     C.pad_mode = 0; C.vsync = 1; C.use_gl = 1;
     C.fx_mode = FX_PIXELS; C.fx_dither = 1; C.renderer = 0;
     C.hd_pack = 1; C.hd_auto = 0; C.ws_battle = 1; C.backdrop = 1; C.cine = 1;
-    C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; C.tips = 1; C.shop_help = 1; C.enemy_hp = 1; C.text_speed = 1;
+    C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; C.tips = 1; C.shop_help = 1; C.enemy_hp = 1; C.text_speed = 1; C.minimap = 1;
     static const uint16_t k[NACT][NKEY] = {
         { VK_UP, 'W' }, { VK_DOWN, 'S' }, { VK_LEFT, 'A' }, { VK_RIGHT, 'D' },
         { 'Z', 'J' }, { 'X', 'K' }, { 'C', VK_SPACE }, { VK_RETURN, 0 },
@@ -189,7 +191,7 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE || n == CFG_V13_SIZE || n == CFG_V14_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE || n == CFG_V13_SIZE || n == CFG_V14_SIZE || n == CFG_V15_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
         memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
         if (n < CFG_V4_SIZE && C.hd) C.fx_mode = FX_SMOOTH;
         if (n < CFG_V5_SIZE) C.renderer = C.use_gl ? 0 : 2;
@@ -200,7 +202,8 @@ static void cfg_load(void)
         if (n < CFG_V12_SIZE) C.tips = 1;
         if (n < CFG_V13_SIZE) C.shop_help = 1;
         if (n < CFG_V14_SIZE) C.fast_sound = 0;
-        if (n < sizeof C) { C.enemy_hp = 1; C.text_speed = 1; }
+        if (n < CFG_V15_SIZE) { C.enemy_hp = 1; C.text_speed = 1; }
+        if (n < sizeof C) C.minimap = 1;
     } else if (n >= 20 + 1200 && *(uint32_t *)b == 0x31475043u)   /* version 1 file: keep the ROM path */
         memcpy(C.rom, b + 20, 1200);
     if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
@@ -214,6 +217,7 @@ static void cfg_load(void)
     if (C.fast_sound < 0 || C.fast_sound > 2) C.fast_sound = 0;
     C.enemy_hp = C.enemy_hp != 0;
     if (C.text_speed < 0 || C.text_speed > 2) C.text_speed = 1;
+    if (C.minimap < 0 || C.minimap > 2) C.minimap = 1;
     free(b);
 }
 
@@ -941,10 +945,11 @@ static void fill(int x, int y, int w, int h, DWORD color)
 
 static void draw_menu(void);
 static void draw_status(void);
-static int menu_rect[4], status_rect[4], tip_rect[4], ach_rect[4], hp_rect[4];   /* x, y, w, h of overlay boxes drawn this frame */
+static int menu_rect[4], status_rect[4], tip_rect[4], ach_rect[4], hp_rect[4], mm_rect[4];   /* x, y, w, h of overlay boxes drawn this frame */
 static void draw_tip(int px, int py, int pw, int ph);
 static void draw_shop(int px, int py, int pw, int ph);
 static void draw_enemy_hp(int px, int py, int pw, int ph);
+static void draw_minimap(int px, int py, int pw, int ph);
 static void draw_ach_toast(void);
 
 /* ---------- OpenGL path (GPU scaling, vsync) ---------- */
@@ -1036,12 +1041,13 @@ static void present(void)
     if (cpu_hd) run_hd(fb, W, H);
 
     /* overlays are drawn with GDI into the back buffer, then copied */
-    menu_rect[2] = status_rect[2] = tip_rect[2] = ach_rect[2] = hp_rect[2] = 0;
+    menu_rect[2] = status_rect[2] = tip_rect[2] = ach_rect[2] = hp_rect[2] = mm_rect[2] = 0;
     if (launcher_open) draw_launcher(cw, ch);
     else if (!menu_open) {
         if (C.tips) draw_tip(x, y, w, h);
         if (C.shop_help && !tip_rect[2]) draw_shop(x, y, w, h);
         if (C.enemy_hp && !tip_rect[2]) draw_enemy_hp(x, y, w, h);   /* the technique panel uses the top in battle */
+        if (C.minimap && !tip_rect[2]) draw_minimap(x, y, w, h);
     }
     if (!launcher_open) draw_ach_toast();
     if (menu_open || status_msg[0]) {
@@ -1079,9 +1085,9 @@ static void present(void)
     }
     if (d3d_ok) {
         d3d_frame(pic, PW, PH, ppitch, x, y, w, h, cw, ch, cine_on ? FX_CINE : C.fx_mode, C.smooth, cine_on || C.fx_dither, C.backdrop);
-        int *rects[5] = { menu_rect, status_rect, tip_rect, ach_rect, hp_rect };
+        int *rects[6] = { menu_rect, status_rect, tip_rect, ach_rect, hp_rect, mm_rect };
         if (cw <= back_w && ch <= back_h)
-            for (int k = 0; k < 5; k++) {
+            for (int k = 0; k < 6; k++) {
                 int *r = rects[k];
                 if (r[0] < 0) { r[2] += r[0]; r[0] = 0; }
                 if (r[1] < 0) { r[3] += r[1]; r[1] = 0; }
@@ -1118,8 +1124,8 @@ static void present(void)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W, H, GL_BGRA_EXT, GL_UNSIGNED_BYTE, fb);
             gl_quad(tex_frame, 512, 256, 0, 0, W, H, x, y, w, h, C.smooth);
         }
-        int *rects[5] = { menu_rect, status_rect, tip_rect, ach_rect, hp_rect };
-        for (int k = 0; k < 5; k++) {
+        int *rects[6] = { menu_rect, status_rect, tip_rect, ach_rect, hp_rect, mm_rect };
+        for (int k = 0; k < 6; k++) {
             int *r = rects[k];
             /* keep the copied box inside the back buffer */
             if (r[0] < 0) { r[2] += r[0]; r[0] = 0; }
@@ -1150,8 +1156,8 @@ static void present(void)
     if (C.smooth) SetBrushOrgEx(dc, 0, 0, 0);
     if (cpu_hd) StretchDIBits(dc, x, y, w, h, 0, 0, W * 4, H * 4, hd_buf, &bmi_hd, DIB_RGB_COLORS, SRCCOPY);
     else StretchDIBits(dc, x, y, w, h, 0, 0, W, H, fb, &bmi_fb, DIB_RGB_COLORS, SRCCOPY);
-    int *rects[5] = { menu_rect, status_rect, tip_rect, ach_rect, hp_rect };
-    for (int k = 0; k < 5; k++) if (rects[k][2] > 0) BitBlt(dc, rects[k][0], rects[k][1], rects[k][2], rects[k][3], back_dc, rects[k][0], rects[k][1], SRCCOPY);
+    int *rects[6] = { menu_rect, status_rect, tip_rect, ach_rect, hp_rect, mm_rect };
+    for (int k = 0; k < 6; k++) if (rects[k][2] > 0) BitBlt(dc, rects[k][0], rects[k][1], rects[k][2], rects[k][3], back_dc, rects[k][0], rects[k][1], SRCCOPY);
     ReleaseDC(hwnd, dc);
 }
 
@@ -1312,6 +1318,36 @@ static void draw_shop(int px, int py, int pw, int ph)
     if (use[0]) { draw_text(bx + pad, ty, use, RGBC(140, 255, 150), font_small); ty += lh; }
     for (int i = 0; i < nr; i++) { draw_text(bx + pad, ty, rows[i], rcol[i], font_small); ty += lh; }
     tip_rect[0] = bx; tip_rect[1] = by; tip_rect[2] = bw; tip_rect[3] = bh;
+}
+
+/* minimap: the field map around the party, top right of the picture */
+static void draw_minimap(int px, int py, int pw, int ph)
+{
+    static uint32_t img[160 * 120];
+    static uint64_t last_clear;
+    int big = C.minimap == 2, w = big ? 160 : 112, h = big ? 120 : 84, mx, my;
+    int r = emu_minimap(img, w, h, &mx, &my);
+    if (!r) return;
+    if (r == 2) last_clear = now_ms();
+    else if (now_ms() - last_clear > 300) return;   /* hidden while windows or dialogs cover the field */
+    int sc = ph / 224; if (sc < 1) sc = 1;               /* one map pixel = one console pixel */
+    if (big) sc = sc * 3 / 2 > 1 ? sc * 3 / 2 : 1;
+    int dw = w * sc, dh = h * sc, b = sc > 1 ? sc : 2;
+    int bx = px + pw - dw - b * 2 - ph / 60, by = py + ph / 60;
+    fill(bx, by, dw + b * 2, dh + b * 2, RGBC(170, 180, 220));
+    BITMAPINFO bi; memset(&bi, 0, sizeof bi);
+    bi.bmiHeader.biSize = sizeof bi.bmiHeader; bi.bmiHeader.biWidth = w; bi.bmiHeader.biHeight = -h;
+    bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32; bi.bmiHeader.biCompression = BI_RGB;
+    SetStretchBltMode(back_dc, COLORONCOLOR);
+    StretchDIBits(back_dc, bx + b, by + b, dw, dh, 0, 0, w, h, img, &bi, DIB_RGB_COLORS, SRCCOPY);
+    /* the party: a blinking marker */
+    int on = (now_ms() / 300) & 1, m = sc * 3 > 4 ? sc * 3 : 4;
+    int cx = bx + b + mx * sc, cy = by + b + my * sc;
+    if (mx >= 0 && my >= 0 && mx < w && my < h) {
+        fill(cx - m / 2 - 1, cy - m / 2 - 1, m + 2, m + 2, RGBC(0, 0, 0));
+        fill(cx - m / 2, cy - m / 2, m, m, on ? RGBC(255, 60, 60) : RGBC(255, 230, 120));
+    }
+    mm_rect[0] = bx; mm_rect[1] = by; mm_rect[2] = dw + b * 2; mm_rect[3] = dh + b * 2;
 }
 
 /* monsters' HP in battle: a small list in the top right corner of the picture */
@@ -1545,6 +1581,7 @@ static void build_menu(void)
         add(L"Описания техник и навыков", onoff(C.tips));
         add(L"Помощник в магазине и инвентаре", onoff(C.shop_help));
         add(L"Здоровье монстров в бою", onoff(C.enemy_hp));
+        { static const wchar_t *mm[3] = { L"выкл", L"маленькая", L"большая" }; add(L"Миникарта (клавиша M)", mm[C.minimap]); }
         add(L"Назад", 0);
         break;
     case M_SPEED: {
@@ -1989,7 +2026,8 @@ static void menu_act(int dir)
         case 0: C.tips = !C.tips; break;
         case 1: C.shop_help = !C.shop_help; break;
         case 2: C.enemy_hp = !C.enemy_hp; break;
-        case 3: if (!dir) { m_page = M_SET; m_sel = 3; } break;
+        case 3: C.minimap = (C.minimap + 3 + (dir ? dir : 1)) % 3; break;
+        case 4: if (!dir) { m_page = M_SET; m_sel = 3; } break;
         }
     } else if (m_page == M_VIDEO) {
         int d = dir ? dir : 1;
@@ -2193,6 +2231,14 @@ static void on_key(int vk, int alt)
     if (menu_open) { menu_key(vk); return; }
     if (launcher_open) { launcher_key(vk); return; }
     if (vk == VK_F1) { menu_set_open(1); m_page = M_HELP; return; }
+    if (vk == 'M') {   /* minimap: off, small, large (unless M is bound to something) */
+        int bound = 0;
+        for (int a = 0; a < NACT; a++) for (int i = 0; i < NKEY; i++) if (C.keys[a][i] == 'M') bound = 1;
+        if (!bound) {
+            static const wchar_t *mm[3] = { L"миникарта выключена", L"миникарта: маленькая", L"миникарта: большая" };
+            C.minimap = (C.minimap + 1) % 3; set_status(mm[C.minimap]); return;
+        }
+    }
     for (int i = 0; i < NKEY; i++) {
         if (C.keys[A_MENU][i] == vk) { menu_set_open(1); return; }
         if (C.keys[A_QSAVE][i] == vk) { state_save(C.slot, 0); return; }
@@ -2406,9 +2452,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.33");
+    diag_init(exe_dir, "0.34");
     diag_info = settings_info;
-    logw("start, version 0.33");
+    logw("start, version 0.34");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {

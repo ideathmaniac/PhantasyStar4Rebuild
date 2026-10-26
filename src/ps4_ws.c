@@ -25,6 +25,8 @@
  * background is wider than the screen, its real columns are shown instead.
  */
 #include <string.h>
+#include <stdio.h>
+#include <stdlib.h>
 #include "md.h"
 
 static uint8_t snap_maps[0x2000];       /* $FFA000-$FFBFFF */
@@ -196,4 +198,51 @@ void ps4_ws_install(void)
     g_ws_begin = ws_begin;
     g_ws_pixel = ws_pixel;
     snap_valid = 0;
+}
+
+/* ---- minimap: the field map around the party at 1/4 size ----
+ * Each output pixel is one pixel of the map (plane A over plane B) sampled
+ * every 4 world pixels; the party leader is object $FFC000 (x.w at +$30,
+ * y.w at +$34). 1 when the field is on screen and the map is known. */
+static uint32_t tile_pixel(int t, int x, int y, int *opaque)
+{
+    int pat = t & 0x7FF, pal = (t >> 13) & 3;
+    if (t & 0x800) x = 7 - x;
+    if (t & 0x1000) y = 7 - y;
+    uint8_t b = V.vram[(pat * 32 + y * 4 + (x >> 1)) & 0xFFFF];
+    int ci = (x & 1) ? (b & 15) : (b >> 4);
+    *opaque = ci != 0;
+    return vdp_color(pal * 16 + ci);
+}
+int ps4_ws_minimap(uint32_t *out, int ow, int oh, int *mx, int *my, int *full_w, int *full_h)
+{
+    if (!snap_valid || !ps4_field_live_any || ramw(0xEF00) != 0x0C) return 0;
+    int clear = ps4_field_live;   /* 2: nothing drawn over the field */
+    int px = ramw(0xC030), py = ramw(0xC034);
+    int wa = snap_wa, ha = snap_ha;
+    int wraps = wa * ha > 4096;
+    int mw = wa * 32, mh = ha * 32;                  /* map size in world pixels */
+    if (full_w) *full_w = wraps ? 0 : mw / 4;
+    if (full_h) *full_h = wraps ? 0 : mh / 4;
+    /* window origin in world pixels: centred on the party, kept inside small maps */
+    int x0 = px - ow * 2, y0 = py - oh * 2;
+    if (!wraps) {
+        if (ow * 4 >= mw) x0 = (mw - ow * 4) / 2; else { if (x0 < 0) x0 = 0; if (x0 > mw - ow * 4) x0 = mw - ow * 4; }
+        if (oh * 4 >= mh) y0 = (mh - oh * 4) / 2; else { if (y0 < 0) y0 = 0; if (y0 > mh - oh * 4) y0 = mh - oh * 4; }
+    }
+    uint32_t bd = vdp_color(V.reg[7] & 0x3F);
+    for (int y = 0; y < oh; y++)
+        for (int x = 0; x < ow; x++) {
+            int wx = x0 + x * 4 + 2, wy = y0 + y * 4 + 2;
+            uint32_t c = 0x000000;
+            int ta = map_tile(snap_maps, snap_blocks, 0, snap_wa, snap_ha, 0xBFFF, wx, wy);
+            int tb = map_tile(snap_maps, snap_blocks, 1, snap_wb, snap_hb, snap_maskb, wx, wy);
+            if (ta < 0 && tb < 0) { out[y * ow + x] = 0x000000; continue; }
+            int op = 0;
+            if (ta >= 0) c = tile_pixel(ta, wx & 7, wy & 7, &op);
+            if (!op) { c = bd; if (tb >= 0) { int ob; uint32_t cb = tile_pixel(tb, wx & 7, wy & 7, &ob); if (ob) c = cb; } }
+            out[y * ow + x] = c;
+        }
+    *mx = (px - x0) / 4; *my = (py - y0) / 4;
+    return clear ? 2 : 1;
 }
