@@ -60,7 +60,7 @@ static const char *tech_desc[NTECH] = {
     "Повышает силу атаки союзника.",
     "Усиливает весь отряд.",
     "Повышает защиту всего отряда.",
-    "Усиливает весь отряд.",
+    "Почти бесполезна; обычным путём в игре не изучается.",
     "Снимает с союзника отравление.",
     "Снимает с союзника вредное состояние.",
     "Возвращает к жизни павшего союзника.",
@@ -158,7 +158,14 @@ static int fill(tip_t *t, int skill, int id /* 0-based within its kind */)
         default: d = "Особый навык."; break;
     }
     snprintf(t->desc, sizeof t->desc, "%s", d);
-    if (skill) snprintf(t->note, sizeof t->note, "%s", "ЕТ не тратит; число применений восстанавливается отдыхом.");
+    /* how techniques work, after the Steam guide "Всё про Phantasy Star IV" */
+    const char *note = 0;
+    if (skill) note = "ЕТ не тратит; применения восстанавливаются отдыхом в гостинице.";
+    else if (eff == 0x01 || eff == 0x02) note = "Не промахивается; урон растёт с Менталом и слабостью врага к стихии.";
+    else if (eff == 0x03 || eff == 0x06 || eff == 0x07 || eff == 0x08) note = "Может не сработать: шанс зависит от Силы или Ментала врага.";
+    else if (eff == 0x12 || eff == 0x15 || eff == 0x16) note = "Не действует на андроидов (Рен, Деми).";
+    else if (id < 38) note = "Не промахивается.";
+    if (note) snprintf(t->note, sizeof t->note, "%s", note);
     return 1;
 }
 

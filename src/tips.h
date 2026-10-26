@@ -10,7 +10,7 @@ typedef struct tip_s {
     char name[32];      /* UTF-8 */
     char target[40];
     char desc[160];
-    char note[120];
+    char note[200];
 } tip_t;
 
 /* 1 and *t filled while a technique or skill list is open (known ROM only) */

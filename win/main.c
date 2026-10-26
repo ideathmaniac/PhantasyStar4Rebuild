@@ -23,7 +23,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.19"
+#define APP_VERSION_W L"v0.20"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -1039,10 +1039,10 @@ static void draw_tip(int px, int py, int pw, int ph)
     if (!seeing || seen.skill != t.skill || seen.id != t.id) { seen = t; seeing = 1; since = now_ms(); }
     if (now_ms() - since >= 50) { shown = seen; have = 1; }   /* skip one-frame flicker while the cursor moves */
     if (!have) return;
-    wchar_t name[40], desc[200], note[160], line3[200], tg[60], cost[40];
+    wchar_t name[40], desc[200], note[200], line3[200], tg[60], cost[40];
     MultiByteToWideChar(65001, 0, shown.name, -1, name, 40);
     MultiByteToWideChar(65001, 0, shown.desc, -1, desc, 200);
-    MultiByteToWideChar(65001, 0, shown.note, -1, note, 160);
+    MultiByteToWideChar(65001, 0, shown.note, -1, note, 200);
     MultiByteToWideChar(65001, 0, shown.target, -1, tg, 60);
     if (shown.cost >= 0) _snwprintf(cost, 39, L"%d ЕТ", shown.cost); else wcscpy(cost, L"навык");
     line3[0] = 0;
@@ -2012,9 +2012,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.19");
+    diag_init(exe_dir, "0.20");
     diag_info = settings_info;
-    logw("start, version 0.19");
+    logw("start, version 0.20");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
