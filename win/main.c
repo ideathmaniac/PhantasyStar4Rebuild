@@ -24,7 +24,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.36"
+#define APP_VERSION_W L"v0.37"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -1489,7 +1489,7 @@ static void fit_window(void)
 /* ======================================================================
  * Overlay menu
  * ====================================================================== */
-enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP, M_HD, M_SAVE, M_STATS, M_BEST, M_ACH, M_SET, M_SOUND, M_HINTS };
+enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP, M_HD, M_SAVE, M_STATS, M_BEST, M_ACH, M_SET, M_SOUND, M_HINTS, M_GOAL };
 static int m_best_page, m_best_next = -1, m_best_ids[10];   /* bestiary page shown; index of the "next page" item */
 static int m_save_load;                     /* M_SAVE lists slots to load (1) or to save into (0) */
 static int m_page, m_sel, m_wait_bind = -1;   /* action index waiting for a key / pad input */
@@ -1503,6 +1503,37 @@ static wchar_t m_title[80];
 static void add(const wchar_t *l, const wchar_t *v) { wcscpy(items[nitems].label, l); wcscpy(items[nitems].value, v ? v : L""); nitems++; }
 
 static const wchar_t *onoff(int v) { return v ? L"вкл" : L"выкл"; }
+
+/* "where next": the story stage guessed from who is in the party and the key
+ * items carried or worn (after the PSCave walkthrough, parts I-III).
+ * Records: 0 Chaz 1 Alys 2 Hahn 3 Rune 4 Gryz 5 Rika 6 Demi 7 Wren 8 Raja 9 Kyra 10 Seth */
+static const wchar_t *story_hint(void)
+{
+    int m = emu_game_mode_top();
+    if (m != 0x0C && m != 0x14) return L"Подсказка появится, когда вы будете в игре (на карте или в бою).";
+    const uint8_t *r = emu_work_ram();
+    int in[16] = { 0 }, has[256] = { 0 };
+    for (int p = 0; p < 5; p++) { int rec = r[0xF40A + p]; if (rec == 0xFF) break; if (rec < 16) in[rec] = 1; }
+    for (int i = 0; i < 40; i++) has[r[0xF410 + i]] = 1;
+    for (int rec = 0; rec < 11; rec++) for (int k = 0; k < 4; k++) has[r[0xF500 + rec * 0x80 + 0x4C + k]] = 1;
+    int ring = has[155] || has[156] || has[157] || has[158] || has[159];
+    if (has[119]) return L"У Чаза меч Элсидеон. Рикрос: Башня Гнева (к юго-западу от Храма Тишины) — Чаз должен отказаться от силы гнева. Затем разлом к северу от Пиаты: финальная битва с Бездонной Тьмой (три формы, берегите навыки).";
+    if (ring) return L"Кольца получены. Вернитесь к Ле Руфу в Храм Тишины, затем в Особняк Эсперов: в пещере у статуи Алис Чаз получит меч Элсидеон.";
+    if (has[143]) return L"Воздушный кристалл у вас — летите на Рикрос. Храм Тишины (Ле Руф), затем Башня Мужества (на юго-востоке, на гидрофоиле) и Башня Силы (к северо-западу): там Кольца звёзд.";
+    if (in[10]) return L"Храм Воинов у Крупа (на гидрофоиле от Деми): Воздушный кристалл на вершине столовой горы. Сет окажется Тёмной силой — бой примерно на 8000 ЕЖ.";
+    if (has[142]) return L"Факел затмения у вас. Хищный лес к северо-востоку от Миза: факел расчистит путь к Башне Гарубека. Глаза на 2-м и 5-м этажах открывают проходы, на 7-м — Тёмная сила (Эфесс Руна очень помогает).";
+    if (in[9]) return L"Особняк Эсперов (к юго-востоку от Миза): шар телепатии в подвале. Затем храм Гумбиос (на запад) за Факелом затмения; его украдут — нужен воздушный замок Лашиека (корабль из космопорта у Тайлера).";
+    if (in[8]) return L"Райюн (бармен), Тайлер: надгробие на западе открывает пещеру с кораблём Ландейл — летите на Куран и отключите главный терминал (в конце — Тёмная сила). Потом Зоза, Долина Мист, Центр климата и Миз.";
+    if (in[7]) return L"После крушения на Дезолисе: в храме Раджи он присоединится к отряду, дальше на север — в Райюн.";
+    if (has[57]) return L"Пси-посох у вас. Нурвус под крепостью Зио: в первом ходу боя с Зио используйте Пси-посох как предмет, чтобы снять его защиту.";
+    if (in[6] && !in[1]) return L"С Деми: Машинный центр к югу от Крупа (лендровер), Монсен, Плато-центр — остановите землетрясения. Затем Терми и Башня Ладеа к югу: наверху Приспешник тьмы с Пси-посохом.";
+    if (in[5] && in[1]) return L"После Биозавода: Нальйа и место крушения корабля, Айедо (гильдия, дом Элис — бесплатный отдых), проход на север к Кадари, затем крепость Зио к югу от Кадари.";
+    if (in[4]) return has[141] ? L"Элшлайн у вас: отнесите его в Зему, чтобы расколдовать жителей. Затем дверь в глубине пещеры Долины Рождения ведёт к Биозаводу."
+                               : L"Тоное: Элшлайн лежит в северном подвале. Потом возвращайтесь в Зему.";
+    if (in[3]) return L"С Руном: Круп (родной город Хана), затем Долина-лабиринт к северу от Крупа — Рун разобьёт валун. Дальше Тоное.";
+    if (in[2]) return L"Подвал Академии Пиаты (босс Улей), затем Майл (снаряжение) и Зема: жители окаменели, нужен Элшлайн — идите в Молкум.";
+    return L"Академия Пиаты: поговорите с директором, затем спуститесь в подвал.";
+}
 
 static void build_menu(void)
 {
@@ -1563,6 +1594,23 @@ static void build_menu(void)
         { static wchar_t a2[40]; int got = 0; for (int i = 0; i < NACH; i++) got += ach_time[i] != 0;
           _snwprintf(a2, 39, L"%d из %d  ▸", got, NACH); add(L"Достижения", a2); }
         add(L"Карта мира (клавиша N)", L"▸");
+        add(L"Куда идти дальше", L"▸");
+        add(L"Назад", 0);
+        break; }
+    case M_GOAL: {
+        wcscpy(m_title, L"Куда идти дальше");
+        static wchar_t rows[12][80];
+        const wchar_t *t = story_hint();
+        int nr = 0, len = (int)wcslen(t), pos = 0;
+        while (pos < len && nr < 11) {
+            int take = len - pos < 60 ? len - pos : 60;
+            if (pos + take < len) { int k = take; while (k > 30 && t[pos + k] != L' ') k--; if (k > 30) take = k; }
+            wcsncpy(rows[nr], t + pos, (size_t)take); rows[nr][take] = 0;
+            add(rows[nr], 0); nr++;
+            pos += take; while (pos < len && t[pos] == L' ') pos++;
+        }
+        add(L"", 0);
+        add(L"Подсказка по составу отряда и ключевым предметам (прохождение PSCave).", 0);
         add(L"Назад", 0);
         break; }
     case M_ACH: {
@@ -2154,7 +2202,10 @@ static void menu_act(int dir)
         if (!dir && i == 5) { m_page = M_BEST; m_best_page = 0; m_sel = 0; }
         if (!dir && i == 6) { m_page = M_ACH; m_sel = NACH; }
         if (!dir && i == 7) { menu_set_open(0); world_open = 1; }
-        if (!dir && i == 8) { m_page = M_MAIN; m_sel = 4; }
+        if (!dir && i == 8) { m_page = M_GOAL; m_sel = 0; }
+        if (!dir && i == 9) { m_page = M_MAIN; m_sel = 4; }
+    } else if (m_page == M_GOAL) {
+        if (!dir) { m_page = M_STATS; m_sel = 8; }
     } else if (m_page == M_ACH) {
         if (!dir && i == NACH) { m_page = M_STATS; m_sel = 6; }
     } else if (m_page == M_BEST) {
@@ -2203,6 +2254,7 @@ static void menu_back(void)
     else if (m_page == M_HD) { m_page = M_VIDEO; m_sel = 11; }
     else if (m_page == M_BEST) { m_page = M_STATS; m_sel = 5; }
     else if (m_page == M_ACH) { m_page = M_STATS; m_sel = 6; }
+    else if (m_page == M_GOAL) { m_page = M_STATS; m_sel = 8; }
     else if (m_page == M_VIDEO || m_page == M_SOUND || m_page == M_SPEED || m_page == M_HINTS || m_page == M_KEYS || m_page == M_PAD) {
         int from = m_page; m_page = M_SET;
         m_sel = from == M_VIDEO ? 0 : from == M_SOUND ? 1 : from == M_SPEED ? 2 : from == M_HINTS ? 3 : from == M_KEYS ? 4 : 5;
@@ -2539,9 +2591,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.36");
+    diag_init(exe_dir, "0.37");
     diag_info = settings_info;
-    logw("start, version 0.36");
+    logw("start, version 0.37");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
