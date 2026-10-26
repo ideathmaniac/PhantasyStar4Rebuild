@@ -15,8 +15,7 @@
  *   (ids + 1), cursor $FF41AF + 2 * slot; the skill list is the acting character's
  *   record +$62 (ids + 1, shown in reverse order), cursor $FF41BB + 2 * slot; the actor
  *   is party slot $FF4107 (party list $FFF40A, records $FFF500 + n * $80).
- *   Field: mode $0C, window $FFEC90 == $56 is the technique list
- *   ($FFE210, cursor $FFECA0).
+ *   Field: mode $0C, see tips_current.
  */
 #include <string.h>
 #include <stdio.h>
@@ -351,11 +350,24 @@ int tips_current(tip_t *t)
         return 0;
     }
     nchosen = 0;
-    if (mode == 0x0C && rw(0xEC90) == 0x56) {
+    /* field menu: $FFEC9A window depth (5 = main, money, status, character,
+     * list), $FFEC9E main menu item (1 = techniques), $FFEC9F the character,
+     * $FFE210 the list (ids + 1), cursor $FFECA0. The list window's id
+     * changes with its size, so it is not used. */
+    if (mode == 0x0C && g_ram[0xEC9A] == 5 && g_ram[0xEC9E] == 1) {
+        int ch = g_ram[0xEC9F];
+        if (ch > 4) return 0;
+        int rec = g_ram[0xF40A + ch];
+        if (rec > 15) return 0;
+        const uint8_t *r = &g_ram[0xF500 + rec * 0x80 + 0x52];
+        int n = 0;
+        for (; n < 16 && g_ram[0xE210 + n]; n++) {   /* the list must be this character's (not a stale one) */
+            int ok = 0;
+            for (int i = 0; i < 16; i++) if (r[i] == g_ram[0xE210 + n]) ok = 1;
+            if (!ok) return 0;
+        }
         int cur = g_ram[0xECA0];
-        if (cur > 15) return 0;
-        int v = g_ram[0xE210 + cur];
-        return v ? fill(t, 0, v - 1) : 0;
+        return cur < n ? fill(t, 0, g_ram[0xE210 + cur] - 1) : 0;
     }
     return 0;
 }
