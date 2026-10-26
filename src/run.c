@@ -18,6 +18,7 @@ void cpu_trace(uint32_t pc)
             R.a[0], R.a[1], R.a[2], R.a[3], R.a[4], R.a[5], R.a[6], R.a[7]);
 }
 int g_force_interp, g_log_interp;
+uint32_t g_skip_sub = 0xFFFFFFFFu;
 uint64_t g_interp_insns;
 uint32_t cpu_cur_pc;
 static uint8_t seen_interp[0x400000 / 2];
@@ -55,6 +56,7 @@ static void interp_one(void)
     }
     if (g_log_interp && pc < 0x400000) seen_interp[pc >> 1] = 1;
     if (g_trace) cpu_trace(pc);
+    if (pc == g_skip_sub) { R.pc = POP32(); return; }   /* skipped subroutine: return at once */
     uint16_t op = (uint16_t)R16(pc);
     m68k_step();
     g_interp_insns++;
@@ -73,6 +75,7 @@ void cpu_interp_exec(void)
 
 static inline void step_any(void)
 {
+    if (R.pc == g_skip_sub) { R.pc = POP32(); return; }
     recomp_fn fn = (!g_force_interp && cpu_lookup) ? cpu_lookup(R.pc) : 0;
     if (fn) fn(R.pc); else interp_one();
 }

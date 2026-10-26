@@ -29,7 +29,11 @@ void cpu_trace(uint32_t pc);
 
 /* calls: after PUSH32(ret), returns from the C function if the callee left
  * the 68000 somewhere else (the dispatcher above us takes it from there) */
-#define CALL_KNOWN(fn, target, ret) do { uint32_t sp0_ = R.a[7] + 4; R.pc = (target); fn(target); \
+/* g_skip_sub: a subroutine address that is returned from at once (the sound driver during speed-ups) */
+extern uint32_t g_skip_sub;
+#define CALL_KNOWN(fn, target, ret) do { uint32_t sp0_ = R.a[7] + 4; \
+    if ((target) == g_skip_sub) { R.a[7] = sp0_; R.pc = (ret); break; } \
+    R.pc = (target); fn(target); \
     if (R.pc != (ret) || R.a[7] != sp0_) { if (cpu_run_until((ret), sp0_)) return; } } while (0)
 #define CALL_ANY(target, ret) do { uint32_t sp0_ = R.a[7] + 4; R.pc = (target) & 0xFFFFFF; \
     if (cpu_run_until((ret), sp0_)) return; } while (0)

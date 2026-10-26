@@ -155,7 +155,8 @@ int main(int argc, char **argv)
     long frames = atol(argv[2]);
     if (getenv("QOL")) { int e = 0, x = 1, m = 1; sscanf(getenv("QOL"), "%d,%d,%d", &e, &x, &m); qol_set(e, x, m); qol_resync(); }
     for (long f = 0; f < frames; f++) {
-        if (getenv("SND_HOLD") && atoi(getenv("SND_HOLD")) > 0) g_snd_hold = f % atoi(getenv("SND_HOLD")) != 0;   /* speed-up sound test */
+        if (getenv("SND_HOLD") && atoi(getenv("SND_HOLD")) > 0) {   /* speed-up sound test */
+            extern uint32_t g_skip_sub; g_snd_hold = f % atoi(getenv("SND_HOLD")) != 0; g_skip_sub = g_snd_hold ? 0x0D0000u : 0xFFFFFFFFu; }
         run_frame();
         if (getenv("QOL")) qol_after_frame();
         bestiary_after_frame();
@@ -264,5 +265,6 @@ int main(int argc, char **argv)
                 fprintf(stderr, "%3d %s: HP %d atk %d def %d agi %d exp %d mes %d | seen %u killed %u\n", id, b.name, b.hp, b.attack, b.defence, b.agility, b.exp, b.meseta, b.seen, b.killed);
         }
     }
+    { extern unsigned long g_ym_w68, g_ym_wz80; if (getenv("YM_COUNT")) fprintf(stderr, "ym writes: 68k %lu, z80 %lu\n", g_ym_w68, g_ym_wz80); }
     return 0;
 }

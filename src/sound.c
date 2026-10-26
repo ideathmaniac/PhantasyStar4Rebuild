@@ -1,3 +1,5 @@
+#include <stdlib.h>
+#include <stdio.h>
 /* Sound system: Z80 bus, Z80 timing per video line, YM2612 + PSG mixing,
  * resampling from the YM rate (53,267 Hz) to 48 kHz. */
 #include <string.h>
@@ -38,10 +40,11 @@ uint8_t z80_read(uint16_t a)
     if (a >= 0x8000) return (uint8_t)md_read8((z80_bank << 15) | (a & 0x7FFF));
     return 0xFF;
 }
+unsigned long g_ym_w68, g_ym_wz80;   /* debug counters */
 void z80_write(uint16_t a, uint8_t v)
 {
     if (a < 0x4000) { g_zram[a & 0x1FFF] = v; return; }
-    if (a < 0x6000) { ym_write(a & 3, v); return; }
+    if (a < 0x6000) { g_ym_wz80++; ym_write(a & 3, v); return; }
     if (a < 0x6100) { z80_bank = ((z80_bank >> 1) | ((v & 1) << 8)) & 0x1FF; return; }
     if (a == 0x7F11 || a == 0x7F13 || a == 0x7F15 || a == 0x7F17) { psg_write(v); return; }
     if (a >= 0x8000) md_write8((z80_bank << 15) | (a & 0x7FFF), v);
@@ -50,7 +53,10 @@ uint8_t z80_in(uint16_t p) { (void)p; return 0xFF; }
 void z80_out(uint16_t p, uint8_t v) { (void)p; (void)v; }
 
 /* the 68000 writes the chips directly too */
-static void ym_from_68k(int port, uint8_t v) { ym_write(port, v); }
+static void ym_from_68k(int port, uint8_t v) {
+    g_ym_w68++;
+    if (getenv("YM_PC")) { extern uint32_t g_ipc; static uint32_t seen[64]; static int ns; int k; for (k = 0; k < ns; k++) if (seen[k] == g_ipc) break; if (k == ns && ns < 64) { seen[ns++] = g_ipc; fprintf(stderr, "ym68k pc %06X\n", g_ipc); } }
+    ym_write(port, v); }
 static void psg_from_68k(uint8_t v) { psg_write(v); }
 extern void (*md_ym_write)(int port, uint8_t v);
 extern void (*md_psg_write)(uint8_t v);

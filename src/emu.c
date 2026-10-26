@@ -90,7 +90,14 @@ void emu_run_frame(void) { run_frame(); if (rom_kind == EMU_ROM_RECOMPILED) { qo
 void emu_set_conveniences(int encounters, int exp_mult, int meseta_mult) { qol_set(encounters, exp_mult, meseta_mult); }
 const uint32_t *emu_framebuffer(int *w, int *h) { *w = g_fb_width; *h = MD_VIS_LINES; return &g_fb[0][0]; }   /* pitch MD_W_MAX */
 int emu_audio(int16_t *out, int max) { return snd_take(out, max); }
-void emu_set_sound_hold(int on) { g_snd_hold = on; }
+void emu_set_sound_hold(int on)
+{
+    extern uint32_t g_skip_sub;
+    g_snd_hold = on;
+    /* Phantasy Star IV plays its FM music from the 68000: the VBlank handler calls the driver at
+     * $0D0000 (RAM $FF5000). Skipping that call keeps the music at its tempo. */
+    g_skip_sub = on && rom_kind == EMU_ROM_RECOMPILED ? 0x0D0000u : 0xFFFFFFFFu;
+}
 int emu_text_printing(void) { return rom_kind == EMU_ROM_RECOMPILED && qol_text_printing(); }
 
 #define STATE_MAGIC 0x34535031u   /* "1PS4" */
