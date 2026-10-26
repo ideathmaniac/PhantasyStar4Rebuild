@@ -23,7 +23,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.24"
+#define APP_VERSION_W L"v0.25"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -1082,8 +1082,10 @@ static void draw_tip(int px, int py, int pw, int ph)
     if (line3[0]) { draw_text(bx + pad, ty, line3, RGBC(170, 200, 255), font_small); ty += lh; }
     if (note[0]) { draw_text(bx + pad, ty, note, RGBC(170, 200, 255), font_small); ty += lh; }
     for (int i = 0; i < ncl; i++) {
-        wchar_t b[420]; _snwprintf(b, 419, L"◆ Комбо %ls", cl[i]); b[419] = 0;
-        draw_text(bx + pad, ty, b, RGBC(255, 200, 120), font_small); ty += lh;
+        int rd = (shown.combo_ready >> i) & 1;   /* the other parts are already ordered this round */
+        wchar_t b[420]; _snwprintf(b, 419, rd ? L"★ Комбо %ls" : L"◆ Комбо %ls", cl[i]); b[419] = 0;
+        if (rd) fill(bx + pad / 2, ty - lh / 10, bw - pad, lh, RGBC(20, 90, 50));
+        draw_text(bx + pad, ty, b, rd ? RGBC(140, 255, 150) : RGBC(255, 200, 120), font_small); ty += lh;
     }
     tip_rect[0] = bx; tip_rect[1] = by; tip_rect[2] = bw; tip_rect[3] = bh;
 }
@@ -2026,9 +2028,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.24");
+    diag_init(exe_dir, "0.25");
     diag_info = settings_info;
-    logw("start, version 0.24");
+    logw("start, version 0.25");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {

@@ -11,7 +11,8 @@ typedef struct tip_s {
     char target[40];
     char desc[160];
     char note[200];
-    char combo[320];    /* combination attacks with this entry, or "" */
+    char combo[320];    /* combination attacks with this entry, "; " between them, or "" */
+    unsigned combo_ready;   /* bit n: combination n already has its other parts ordered this round */
 } tip_t;
 
 /* 1 and *t filled while a technique or skill list is open (known ROM only) */

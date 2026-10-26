@@ -202,9 +202,17 @@ static int in_group(int g, int idx)
 }
 
 /* "Ураган огня: + ЗАН или БУРЯ; Метель: + ВАТ" for entry idx */
-static void combos_for(int idx, char *out, int n)
+/* entries chosen this round by the characters who already gave orders */
+static int chosen[5], nchosen;
+static int group_chosen(int g)
 {
-    int k = 0; out[0] = 0;
+    for (int i = 0; i < nchosen; i++) if (in_group(g, chosen[i])) return 1;
+    return 0;
+}
+
+static void combos_for(int idx, char *out, int n, unsigned *ready)
+{
+    int k = 0, line = 0; out[0] = 0; *ready = 0;
     const char *done[8]; int nd = 0;
     for (size_t a = 0; a < sizeof CA / sizeof CA[0]; a++) {
         int seen = 0;
@@ -212,6 +220,7 @@ static void combos_for(int idx, char *out, int n)
         if (seen) continue;
         /* all variants of this combination that include idx */
         char parts[4][120]; int np = 0; const char *cond = 0;
+        char have[120] = "";   /* the partners already chosen, when a variant is complete */
         for (size_t b = a; b < sizeof CA / sizeof CA[0]; b++) {
             if (strcmp(CA[b].name, CA[a].name)) continue;
             int mine = -1;
@@ -227,6 +236,13 @@ static void combos_for(int idx, char *out, int n)
                 for (int j = 0; j < 4 && CA[b].g[j] >= 0; j++)
                     pl += snprintf(part + pl, sizeof part - pl, "%s%s", pl ? " → " : "", G[(int)CA[b].g[j]].label);
             }
+            int all = 1, hl = 0; char h[120] = "";
+            for (int j = 0; j < 4 && CA[b].g[j] >= 0; j++) {
+                if (j == mine) continue;
+                if (!group_chosen(CA[b].g[j])) all = 0;
+                hl += snprintf(h + hl, sizeof h - hl, "%s%s", hl ? ", " : "", G[(int)CA[b].g[j]].label);
+            }
+            if (all && !have[0]) snprintf(have, sizeof have, "%s", h);
             int dup = 0;
             for (int q = 0; q < np; q++) if (!strcmp(parts[q], part)) dup = 1;
             if (!dup && np < 4) snprintf(parts[np++], 120, "%s", part);
@@ -234,6 +250,15 @@ static void combos_for(int idx, char *out, int n)
         }
         if (!np) continue;
         if (nd < 8) done[nd++] = CA[a].name;
+        if (have[0]) {   /* the rest of the combination is already ordered this round */
+            if (line < 32) *ready |= 1u << line;
+            k += snprintf(out + k, n - k, "%s%s: уже выбрано %s", k ? "; " : "", CA[a].name, have);
+            if (cond && k < n) k += snprintf(out + k, n - k, " (%s)", cond);
+            line++;
+            if (k >= n) { out[n - 1] = 0; break; }
+            continue;
+        }
+        line++;
         k += snprintf(out + k, n - k, "%s%s: %s", k ? "; " : "", CA[a].name, CA[a].g[2] >= 0 ? "" : "+ ");
         for (int q = 0; q < np && k < n; q++) k += snprintf(out + k, n - k, "%s%s", q ? " или " : "", parts[q]);
         if (cond && k < n) k += snprintf(out + k, n - k, " (%s)", cond);
@@ -287,7 +312,7 @@ static int fill(tip_t *t, int skill, int id /* 0-based within its kind */)
     else if (eff == 0x12 || eff == 0x15 || eff == 0x16) note = "Не действует на андроидов (Рен, Деми).";
     else if (id < 38) note = "Не промахивается.";
     if (note) snprintf(t->note, sizeof t->note, "%s", note);
-    combos_for(idx, t->combo, sizeof t->combo);
+    combos_for(idx, t->combo, sizeof t->combo, &t->combo_ready);
     return 1;
 }
 
@@ -300,6 +325,14 @@ int tips_current(tip_t *t)
         uint8_t state = g_ram[0x4109];     /* command menu state: 8 technique list, $11 skill list */
         int slot = g_ram[0x4107];          /* acting party slot; each slot keeps its own cursors */
         if (slot > 4) return 0;
+        /* orders given this round: $FF410A + 4 * slot = command (2 technique, 3 skill), +1 = id + 1 */
+        nchosen = 0;
+        for (int s = 0; s < slot; s++) {
+            int cmd = g_ram[0x410A + 4 * s], v = g_ram[0x410B + 4 * s];
+            if (!v) continue;
+            if (cmd == 2 && v <= NTECH) chosen[nchosen++] = v - 1;
+            else if (cmd == 3 && v <= NSKILL) chosen[nchosen++] = NTECH + v - 1;
+        }
         if (state == 0x08) {
             int cur = g_ram[0x41AF + 2 * slot];
             if (cur > 15) return 0;
@@ -317,6 +350,7 @@ int tips_current(tip_t *t)
         }
         return 0;
     }
+    nchosen = 0;
     if (mode == 0x0C && rw(0xEC90) == 0x56) {
         int cur = g_ram[0xECA0];
         if (cur > 15) return 0;
