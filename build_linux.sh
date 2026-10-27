@@ -17,7 +17,7 @@ if [ ! -f $OUT/fonts.c ] || [ third_party/fonts/DejaVuSans.ttf -nt $OUT/fonts.c 
   python3 tools/embed_fonts.py $OUT/fonts.c
 fi
 CFLAGS="-O2 -w -fno-strict-aliasing -Iport/include -Isrc -Ithird_party/SDL2/include -Ithird_party/stb -D_DEFAULT_SOURCE -D_XOPEN_SOURCE=700 -D_REENTRANT $RECOMP $EXTRA_CFLAGS"
-SRCS="src/png.c src/hdpack.c src/resample.c src/qol.c src/tips.c src/shop.c src/bestiary.c src/m68k.c src/md.c src/vdp.c src/run.c src/z80.c src/ym2612.c src/psg.c src/sound.c src/ps4_ws.c src/hdscale.c src/rewind.c src/emu.c win/main.c $GLSRC win/ui_soft.c port/sdl_win32.c $OUT/fonts.c $GEN"
+SRCS="src/png.c src/hdpack.c src/resample.c src/qol.c src/tips.c src/shop.c src/bestiary.c src/portraits.c src/nemesis.c src/m68k.c src/md.c src/vdp.c src/run.c src/z80.c src/ym2612.c src/psg.c src/sound.c src/ps4_ws.c src/hdscale.c src/rewind.c src/emu.c win/main.c $GLSRC win/ui_soft.c port/sdl_win32.c $OUT/fonts.c $GEN"
 JOBS=${JOBS:-$(nproc)}
 NEWEST_H=$(ls -t port/include/*.h win/fx_shaders.h win/include/win32.h src/*.h win/*.h | head -1)
 for o in $OUT/obj/*.o; do [ -f "$o" ] && [ "$NEWEST_H" -nt "$o" ] && rm -f $OUT/obj/*.o && break; done

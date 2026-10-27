@@ -442,6 +442,12 @@ static void grpE(uint16_t op)
 int m68k_step(void)
 {
     g_ipc = R.pc;
+#ifdef PS4_TRACE_PC   /* debugging: registers each time the code reaches one address */
+    { static long tp = -2; if (tp == -2) { const char *e = getenv("TRACE_PC"); tp = e ? strtol(e, 0, 16) : -1; }
+      if ((long)R.pc == tp) { extern uint64_t g_frame; uint32_t sp = R.a[7]; 
+        fprintf(stderr, "f%llu TRACE %06X a0=%06X a1=%06X a4=%06X d0=%X d1=%X ret=%02X%02X%02X%02X\n", (unsigned long long)g_frame, R.pc, R.a[0], R.a[1], R.a[4], R.d[0], R.d[1],
+                md_read8(sp), md_read8(sp + 1), md_read8(sp + 2), md_read8(sp + 3)); } }
+#endif
     uint16_t op = fetch16();
     switch (op >> 12) {
     case 0x0: grp0(op); break;

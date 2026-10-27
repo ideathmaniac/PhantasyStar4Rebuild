@@ -19,12 +19,13 @@
 #include "glfx.h"
 #include "d3dfx.h"
 #include "../src/hdpack.h"
+#include "../src/portraits.h"
 #include "../src/png.h"
 #include "ui_soft.h"
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.38"
+#define APP_VERSION_W L"v0.39"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -59,6 +60,7 @@ typedef struct {
     int32_t enemy_hp, text_speed;          /* added in 0.32: monsters' HP in battle; text 0 normal, 1 fast, 2 very fast */
     int32_t minimap;                       /* added in 0.34: 0 off, 1 small, 2 large */
     int32_t fog, fast_walk;                /* added in 0.35: minimap fog of war; walking 0 normal, 1 x2 holding B, 2 x2 always */
+    int32_t party_hud;                     /* added in 0.39: party portraits with HP / TP at the top left */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
@@ -77,6 +79,7 @@ typedef struct {
 #define CFG_V14_SIZE (offsetof(cfg_t, enemy_hp))
 #define CFG_V15_SIZE (offsetof(cfg_t, minimap))
 #define CFG_V16_SIZE (offsetof(cfg_t, fog))
+#define CFG_V17_SIZE (offsetof(cfg_t, party_hud))
 static cfg_t C;
 
 /* pad input codes */
@@ -100,7 +103,7 @@ static void cfg_defaults(void)
     C.pad_mode = 0; C.vsync = 1; C.use_gl = 1;
     C.fx_mode = FX_PIXELS; C.fx_dither = 1; C.renderer = 0;
     C.hd_pack = 1; C.hd_auto = 0; C.ws_battle = 1; C.backdrop = 1; C.cine = 1;
-    C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; C.tips = 1; C.shop_help = 1; C.enemy_hp = 1; C.text_speed = 1; C.minimap = 1; C.fog = 1; C.fast_walk = 1;
+    C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; C.tips = 1; C.shop_help = 1; C.enemy_hp = 1; C.text_speed = 1; C.minimap = 1; C.fog = 1; C.fast_walk = 1; C.party_hud = 1;
     static const uint16_t k[NACT][NKEY] = {
         { VK_UP, 'W' }, { VK_DOWN, 'S' }, { VK_LEFT, 'A' }, { VK_RIGHT, 'D' },
         { 'Z', 'J' }, { 'X', 'K' }, { 'C', VK_SPACE }, { VK_RETURN, 0 },
@@ -193,7 +196,7 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE || n == CFG_V13_SIZE || n == CFG_V14_SIZE || n == CFG_V15_SIZE || n == CFG_V16_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE || n == CFG_V13_SIZE || n == CFG_V14_SIZE || n == CFG_V15_SIZE || n == CFG_V16_SIZE || n == CFG_V17_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
         memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
         if (n < CFG_V4_SIZE && C.hd) C.fx_mode = FX_SMOOTH;
         if (n < CFG_V5_SIZE) C.renderer = C.use_gl ? 0 : 2;
@@ -206,7 +209,8 @@ static void cfg_load(void)
         if (n < CFG_V14_SIZE) C.fast_sound = 0;
         if (n < CFG_V15_SIZE) { C.enemy_hp = 1; C.text_speed = 1; }
         if (n < CFG_V16_SIZE) C.minimap = 1;
-        if (n < sizeof C) { C.fog = 1; C.fast_walk = 1; }
+        if (n < CFG_V17_SIZE) { C.fog = 1; C.fast_walk = 1; }
+        if (n < sizeof C) C.party_hud = 1;
     } else if (n >= 20 + 1200 && *(uint32_t *)b == 0x31475043u)   /* version 1 file: keep the ROM path */
         memcpy(C.rom, b + 20, 1200);
     if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
@@ -985,6 +989,16 @@ static void fill(int x, int y, int w, int h, DWORD color)
 static void draw_menu(void);
 static void draw_status(void);
 static int menu_rect[4], status_rect[4], tip_rect[4], ach_rect[4], hp_rect[4], mm_rect[4];   /* x, y, w, h of overlay boxes drawn this frame */
+static int party_rect[5][4];
+/* every overlay box of this frame, for copying over the picture */
+static int overlay_rects(int **r)
+{
+    int n = 0;
+    r[n++] = menu_rect; r[n++] = status_rect; r[n++] = tip_rect; r[n++] = ach_rect; r[n++] = hp_rect; r[n++] = mm_rect;
+    for (int k = 0; k < 5; k++) r[n++] = party_rect[k];
+    return n;
+}
+static void draw_party(int px, int py, int pw, int ph);
 static void draw_tip(int px, int py, int pw, int ph);
 static void draw_shop(int px, int py, int pw, int ph);
 static void draw_enemy_hp(int px, int py, int pw, int ph);
@@ -1083,6 +1097,7 @@ static void present(void)
 
     /* overlays are drawn with GDI into the back buffer, then copied */
     menu_rect[2] = status_rect[2] = tip_rect[2] = ach_rect[2] = hp_rect[2] = mm_rect[2] = 0;
+    for (int k = 0; k < 5; k++) party_rect[k][2] = 0;
     if (launcher_open) draw_launcher(cw, ch);
     else if (world_open && !menu_open) draw_world(cw, ch);
     else if (!menu_open) {
@@ -1090,6 +1105,7 @@ static void present(void)
         if (C.shop_help && !tip_rect[2]) draw_shop(x, y, w, h);
         if (C.enemy_hp && !tip_rect[2]) draw_enemy_hp(x, y, w, h);   /* the technique panel uses the top in battle */
         if (C.minimap && !tip_rect[2]) draw_minimap(x, y, w, h);
+        if (C.party_hud) draw_party(x, y, w, h);
     }
     if (!launcher_open) draw_ach_toast();
     if (menu_open || status_msg[0]) {
@@ -1127,9 +1143,9 @@ static void present(void)
     }
     if (d3d_ok) {
         d3d_frame(pic, PW, PH, ppitch, x, y, w, h, cw, ch, cine_on ? FX_CINE : C.fx_mode, C.smooth, cine_on || C.fx_dither, C.backdrop);
-        int *rects[6] = { menu_rect, status_rect, tip_rect, ach_rect, hp_rect, mm_rect };
+        int *rects[16]; int nrects = overlay_rects(rects);
         if (cw <= back_w && ch <= back_h)
-            for (int k = 0; k < 6; k++) {
+            for (int k = 0; k < nrects; k++) {
                 int *r = rects[k];
                 if (r[0] < 0) { r[2] += r[0]; r[0] = 0; }
                 if (r[1] < 0) { r[3] += r[1]; r[1] = 0; }
@@ -1166,8 +1182,8 @@ static void present(void)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W, H, GL_BGRA_EXT, GL_UNSIGNED_BYTE, fb);
             gl_quad(tex_frame, 512, 256, 0, 0, W, H, x, y, w, h, C.smooth);
         }
-        int *rects[6] = { menu_rect, status_rect, tip_rect, ach_rect, hp_rect, mm_rect };
-        for (int k = 0; k < 6; k++) {
+        int *rects[16]; int nrects = overlay_rects(rects);
+        for (int k = 0; k < nrects; k++) {
             int *r = rects[k];
             /* keep the copied box inside the back buffer */
             if (r[0] < 0) { r[2] += r[0]; r[0] = 0; }
@@ -1198,8 +1214,8 @@ static void present(void)
     if (C.smooth) SetBrushOrgEx(dc, 0, 0, 0);
     if (cpu_hd) StretchDIBits(dc, x, y, w, h, 0, 0, W * 4, H * 4, hd_buf, &bmi_hd, DIB_RGB_COLORS, SRCCOPY);
     else StretchDIBits(dc, x, y, w, h, 0, 0, W, H, fb, &bmi_fb, DIB_RGB_COLORS, SRCCOPY);
-    int *rects[6] = { menu_rect, status_rect, tip_rect, ach_rect, hp_rect, mm_rect };
-    for (int k = 0; k < 6; k++) if (rects[k][2] > 0) BitBlt(dc, rects[k][0], rects[k][1], rects[k][2], rects[k][3], back_dc, rects[k][0], rects[k][1], SRCCOPY);
+    int *rects[16]; int nrects = overlay_rects(rects);
+    for (int k = 0; k < nrects; k++) if (rects[k][2] > 0) BitBlt(dc, rects[k][0], rects[k][1], rects[k][2], rects[k][3], back_dc, rects[k][0], rects[k][1], SRCCOPY);
     ReleaseDC(hwnd, dc);
 }
 
@@ -1417,6 +1433,92 @@ static void draw_minimap(int px, int py, int pw, int ph)
 }
 
 /* monsters' HP in battle: a small list in the top right corner of the picture */
+/* the party panel, top left: for each member a portrait (from the ROM,
+ * src/portraits.c) with the level, then the HP bar with numbers and a thin
+ * TP bar; the leader's frame is gold, a fallen member is greyed out */
+static void put_portrait(const uint32_t *src, int x0, int y0, int s, int grey)
+{
+    uint32_t *dst = (uint32_t *)back_bits;
+    for (int y = 0; y < s; y++) {
+        int yy = y0 + y; if (yy < 0 || yy >= back_h) continue;
+        float fy = (y + 0.5f) * PORTRAIT_W / s - 0.5f; int iy = (int)fy; float ay = fy - iy;
+        if (fy < 0) { iy = 0; ay = 0; }
+        if (iy >= PORTRAIT_W - 1) { iy = PORTRAIT_W - 2; ay = 1; }
+        for (int x = 0; x < s; x++) {
+            int xx = x0 + x; if (xx < 0 || xx >= back_w) continue;
+            float fx = (x + 0.5f) * PORTRAIT_W / s - 0.5f; int ix = (int)fx; float ax = fx - ix;
+            if (fx < 0) { ix = 0; ax = 0; }
+            if (ix >= PORTRAIT_W - 1) { ix = PORTRAIT_W - 2; ax = 1; }
+            /* sharpened bilinear: the pixel art stays crisp, every pixel the same size */
+            ax = ax < 0.3f ? 0 : ax > 0.7f ? 1 : (ax - 0.3f) / 0.4f;
+            ay = ay < 0.3f ? 0 : ay > 0.7f ? 1 : (ay - 0.3f) / 0.4f;
+            const uint32_t *p = src + iy * PORTRAIT_W + ix;
+            float c[3];
+            for (int k = 0; k < 3; k++) {
+                int sh = 16 - 8 * k;
+                float a = ((p[0] >> sh) & 255) * (1 - ax) + ((p[1] >> sh) & 255) * ax;
+                float b = ((p[PORTRAIT_W] >> sh) & 255) * (1 - ax) + ((p[PORTRAIT_W + 1] >> sh) & 255) * ax;
+                c[k] = a * (1 - ay) + b * ay;
+            }
+            if (grey) { float l = (c[0] * 0.3f + c[1] * 0.59f + c[2] * 0.11f) * 0.55f; c[0] = c[1] = c[2] = l; }
+            dst[(size_t)yy * back_w + xx] = (uint32_t)c[0] << 16 | (uint32_t)c[1] << 8 | (uint32_t)c[2];
+        }
+    }
+}
+static void draw_party(int px, int py, int pw, int ph)
+{
+    (void)px; (void)pw; (void)ph;
+    int m = emu_game_mode_top();
+    if (m != 0x0C && m != 0x14) return;
+    const uint8_t *r = emu_work_ram();
+    int s = back_h * 10 / 100; if (s < 52) s = 52; if (s > 128) s = 128;
+    int sh = font_h * 4 / 5 + 2, tp = font_h / 4 > 3 ? font_h / 4 : 3, gap = font_h / 2;
+    int x0 = font_h / 2 + 3, y = (py > font_h / 2 ? py : font_h / 2) + 3;
+    for (int k = 0; k < 5; k++) {
+        int rec = r[0xF40A + k];
+        if (rec == 0xFF || rec > 10) break;
+        const uint8_t *c = r + 0xF500 + rec * 0x80;
+        int lv = c[8] << 8 | c[9], hp = (int16_t)(c[0x0E] << 8 | c[0x0F]), hpm = c[0x10] << 8 | c[0x11];
+        int tpv = (int16_t)(c[0x12] << 8 | c[0x13]), tpm = c[0x14] << 8 | c[0x15];
+        if (hpm <= 0 || hpm > 9999 || lv <= 0 || lv > 99) break;   /* not a real record yet */
+        int dead = hp <= 0;
+        const uint32_t *pic = portrait_pixels(rec);
+        int bx = x0 - 3, by = y - 3, bw = s + 6, bhh = s + 6 + sh + tp + 5;
+        fill(bx, by, bw, bhh, RGBC(14, 16, 30));
+        fill(x0 - 2, y - 2, s + 4, s + 4, k == 0 ? RGBC(214, 176, 92) : RGBC(92, 104, 150));
+        if (pic) put_portrait(pic, x0, y, s, dead);
+        else {
+            fill(x0, y, s, s, RGBC(40, 46, 80));
+            wchar_t nm[16]; ui_ps4_name(c, nm, 16); nm[2] = 0;
+            draw_text(x0 + s / 4, y + s / 3, nm, RGBC(230, 230, 255), font_big);
+        }
+        { /* the level: a badge at the bottom left of the portrait */
+            wchar_t t[8]; _snwprintf(t, 7, L"%d", lv); t[7] = 0;
+            int tw = text_w(t, font_small) + font_h / 2, th = font_h * 4 / 5 + 2;
+            fill(x0, y + s - th, tw, th, RGBC(18, 20, 40));
+            draw_text(x0 + font_h / 4, y + s - th, t, RGBC(255, 220, 130), font_small);
+        }
+        /* HP: the bar with the numbers on it */
+        int hy = y + s + 3;
+        fill(x0, hy, s, sh, RGBC(48, 20, 24));
+        int hv = hp < 0 ? 0 : hp > hpm ? hpm : hp;
+        DWORD hc = hv * 4 <= hpm ? RGBC(200, 58, 48) : hv * 2 <= hpm ? RGBC(206, 160, 52) : RGBC(62, 160, 78);
+        fill(x0, hy, s * hv / hpm, sh, hc);
+        {
+            wchar_t t[24]; _snwprintf(t, 23, L"%d/%d", hv, hpm); t[23] = 0;
+            if (text_w(t, font_small) > s - 2) { _snwprintf(t, 23, L"%d", hv); t[23] = 0; }
+            draw_text(x0 + (s - text_w(t, font_small)) / 2, hy, t, RGBC(255, 255, 255), font_small);
+        }
+        /* TP: a thin bar */
+        int ty = hy + sh + 2;
+        fill(x0, ty, s, tp, RGBC(22, 28, 60));
+        if (tpm > 0) { int tv = tpv < 0 ? 0 : tpv > tpm ? tpm : tpv; fill(x0, ty, s * tv / tpm, tp, RGBC(86, 150, 255)); }
+        party_rect[k][0] = bx; party_rect[k][1] = by; party_rect[k][2] = bw; party_rect[k][3] = bhh;
+        y += bhh + gap;
+        if (y + bhh > back_h) break;
+    }
+}
+
 static void draw_enemy_hp(int px, int py, int pw, int ph)
 {
     (void)ph;
@@ -1713,6 +1815,7 @@ static void build_menu(void)
         add(L"Здоровье монстров в бою", onoff(C.enemy_hp));
         { static const wchar_t *mm[3] = { L"выкл", L"маленькая", L"большая" }; add(L"Миникарта (клавиша M)", mm[C.minimap]); }
         add(L"Миникарта: только пройденное", onoff(C.fog));
+        add(L"Панель отряда (портреты, ЕЖ, ЕТ)", onoff(C.party_hud));
         add(L"Назад", 0);
         break;
     case M_SPEED: {
@@ -2165,7 +2268,8 @@ static void menu_act(int dir)
         case 2: C.enemy_hp = !C.enemy_hp; break;
         case 3: C.minimap = (C.minimap + 3 + (dir ? dir : 1)) % 3; break;
         case 4: C.fog = !C.fog; emu_set_fog(C.fog); break;
-        case 5: if (!dir) { m_page = M_SET; m_sel = 3; } break;
+        case 5: C.party_hud = !C.party_hud; break;
+        case 6: if (!dir) { m_page = M_SET; m_sel = 3; } break;
         }
     } else if (m_page == M_VIDEO) {
         int d = dir ? dir : 1;
@@ -2633,9 +2737,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.38");
+    diag_init(exe_dir, "0.39");
     diag_info = settings_info;
-    logw("start, version 0.38");
+    logw("start, version 0.39");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {

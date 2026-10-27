@@ -7,7 +7,7 @@ include $(CLEAR_VARS)
 LOCAL_MODULE := main
 ROOT := ../../..
 LOCAL_SRC_FILES := $(addprefix $(ROOT)/, \
-    src/png.c src/hdpack.c src/resample.c src/qol.c src/tips.c src/shop.c src/bestiary.c \
+    src/png.c src/hdpack.c src/resample.c src/qol.c src/tips.c src/shop.c src/bestiary.c src/portraits.c src/nemesis.c \
     src/m68k.c src/md.c src/vdp.c src/run.c src/z80.c src/ym2612.c src/psg.c src/sound.c \
     src/ps4_ws.c src/hdscale.c src/rewind.c src/emu.c \
     win/main.c win/glfx.c win/ui_soft.c port/sdl_win32.c port/gles.c) fonts.c
