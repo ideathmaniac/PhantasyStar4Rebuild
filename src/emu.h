@@ -19,6 +19,8 @@ void emu_reset(void);
 void emu_set_pad(int port, uint16_t buttons);  /* PAD_* bits from md.h */
 void emu_run_frame(void);
 const uint32_t *emu_framebuffer(int *w, int *h); /* 0x00RRGGBB, pitch 320 pixels */
+/* which layer drew each pixel of the frame (same layout): 0 backdrop, 1 plane B, 2 plane A, 3 sprite, 4 window */
+const uint8_t *emu_layers(void);
 int  emu_audio(int16_t *out, int max_frames);   /* 48 kHz stereo */
 
 size_t emu_state_size(void);

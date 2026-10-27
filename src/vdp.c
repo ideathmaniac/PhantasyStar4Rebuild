@@ -4,6 +4,7 @@
 
 vdp_t V;
 uint32_t g_fb[MD_VIS_LINES][MD_W_MAX];
+uint8_t g_layer[MD_VIS_LINES][MD_W_MAX];   /* per pixel: 0 backdrop, 1 plane B, 2 plane A, 3 sprite, 4 window (for picture effects) */
 int g_fb_width = 320;
 
 void vdp_reset(void)
@@ -311,6 +312,7 @@ void vdp_render_line(int line)
     uint32_t bd = cram_rgb(V.reg[7] & 0x3F, 0);
     if (!(V.reg[1] & 0x40)) {
         for (int x = 0; x < MD_W_MAX; x++) dst[x] = bd;
+        memset(g_layer[line], 0, MD_W_MAX);
         if (g_hd_track) memset(g_src[line], 0, sizeof g_src[line]);
         return;
     }
@@ -323,15 +325,17 @@ void vdp_render_line(int line)
     int hp = (V.reg[17] & 0x1F) * 16, right = V.reg[17] & 0x80;
     uint8_t *law = la + E;
     uint32_t *saw = sa + E;
-    if (down ? line >= vp : line < vp) draw_window_span(law, saw, line, 0, W);
+    int wx0 = 0, wx1 = 0;   /* the window's span on this line, in TW coordinates */
+    if (down ? line >= vp : line < vp) { draw_window_span(law, saw, line, 0, W); wx0 = E; wx1 = E + W; }
     else if (hp) {
-        if (right) { if (hp < W) draw_window_span(law, saw, line, hp, W); }
-        else draw_window_span(law, saw, line, 0, hp < W ? hp : W);
+        if (right) { if (hp < W) { draw_window_span(law, saw, line, hp, W); wx0 = E + hp; wx1 = E + W; } }
+        else { draw_window_span(law, saw, line, 0, hp < W ? hp : W); wx0 = E; wx1 = E + (hp < W ? hp : W); }
     }
     draw_sprites(ls, line, W, E);
 
     int sh = (V.reg[12] & 0x08) != 0;
     uint32_t *srow = g_hd_track ? g_src[line] : 0;
+    uint8_t *lrow = g_layer[line];
     for (int x = 0; x < TW; x++) {
         uint8_t a = la[x], b = lb[x], s = ls[x];
         uint8_t val[3] = { s, a, b };
@@ -361,11 +365,13 @@ void vdp_render_line(int line)
             if (n) { win = order[0]; pix = val[win]; }
             dst[x] = pix ? cram_rgb(pix & 0x3F, 0) : bd;
         }
+        /* 4: the window or high-priority plane A, where the game draws its menus and text boxes (and roofs) */
+        lrow[x] = (uint8_t)(win == 0 ? 3 : win == 1 ? ((x >= wx0 && x < wx1) || (a & 0x80) ? 4 : 2) : win == 2 ? 1 : 0);
         if (srow) {
             uint32_t sv = win == 0 ? ss[x] : win == 1 ? sa[x] : win == 2 ? sb[x] : 0;
             srow[x] = sv ? sv | ((uint32_t)lvl << 21) : 0;
         }
     }
-    for (int x = TW; x < MD_W_MAX; x++) dst[x] = 0;
+    for (int x = TW; x < MD_W_MAX; x++) { dst[x] = 0; lrow[x] = 0; }
     if (srow) for (int x = TW; x < MD_W_MAX; x++) srow[x] = 0;
 }

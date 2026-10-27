@@ -1325,6 +1325,7 @@ void d3d_frame(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w,
 { (void)fb; (void)W; (void)H; (void)pitch; (void)x; (void)y; (void)w; (void)h; (void)cw; (void)ch; (void)mode; (void)bilinear; (void)dither; (void)backdrop; }
 void d3d_overlay(const uint32_t *bits, int bw, int bh, int rx, int ry, int rw, int rh) { (void)bits; (void)bw; (void)bh; (void)rx; (void)ry; (void)rw; (void)rh; }
 int d3d_present(int vsync) { (void)vsync; return 0; }
+void d3d_set_effects(float a, float b, int c) { (void)a; (void)b; (void)c; }
 
 #ifdef PS4_NO_GL
 #include "../win/glfx.h"
@@ -1351,6 +1352,7 @@ void port_glPixelStorei(GLenum a, GLint b) { (void)a; (void)b; }
 const unsigned char *port_glGetString(GLenum a) { (void)a; return 0; }
 GLenum port_glGetError(void) { return 1; }
 int glfx_init(glfx_getproc_t g) { (void)g; return 0; }
+void glfx_set_effects(float a, float b, int c) { (void)a; (void)b; (void)c; }
 const char *glfx_error(void) { return "no OpenGL"; }
 void glfx_draw(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w, int h, int cw, int ch, int mode, int bilinear, int dither, int backdrop)
 { (void)fb; (void)W; (void)H; (void)pitch; (void)x; (void)y; (void)w; (void)h; (void)cw; (void)ch; (void)mode; (void)bilinear; (void)dither; (void)backdrop; }

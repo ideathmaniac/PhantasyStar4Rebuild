@@ -250,6 +250,11 @@ int main(int argc, char **argv)
         uint32_t d = (uint32_t)wav_frames * 4, r = d + 36;
         fseek(wav, 4, SEEK_SET); fwrite(&r, 4, 1, wav); fseek(wav, 40, SEEK_SET); fwrite(&d, 4, 1, wav); fclose(wav);
     }
+    if (getenv("LAYER_PGM")) {   /* the layer map of the last frame: 0 backdrop .. 4 window, x60 */
+        FILE *o = fopen(getenv("LAYER_PGM"), "wb"); fprintf(o, "P5\n%d %d\n255\n", MD_W_MAX, MD_VIS_LINES);
+        for (int y = 0; y < MD_VIS_LINES; y++) for (int x = 0; x < MD_W_MAX; x++) fputc(g_layer[y][x] * 60, o);
+        fclose(o);
+    }
     if (getenv("VDP_DUMP")) {
         FILE *d = fopen(getenv("VDP_DUMP"), "wb");
         fwrite(V.vram, 1, sizeof V.vram, d); fwrite(V.cram, 2, 64, d); fwrite(V.vsram, 2, 40, d); fwrite(V.reg, 1, 32, d);

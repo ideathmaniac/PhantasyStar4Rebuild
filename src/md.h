@@ -47,6 +47,7 @@ extern uint64_t g_line_end;      /* g_cycles value at which the line ends */
 
 /* framebuffer: one 32-bit pixel (0x00RRGGBB) per dot, H40 = 320 wide */
 extern uint32_t g_fb[MD_VIS_LINES][MD_W_MAX];
+extern uint8_t g_layer[MD_VIS_LINES][MD_W_MAX];
 /* HD packs: per screen pixel, the tile pixel it shows (0 = backdrop / none) */
 #define VSRC_VALID 0x80000000u
 #define VSRC_TILE(s) ((s) & 0x7FF)

@@ -113,6 +113,9 @@ static int ovl_w, ovl_h;
 static void *cbuf, *samp, *rast, *vs;
 static void *ps_dither, *ps_edge, *ps_xbr, *ps_pixels, *ps_crt, *ps_copy, *ps_back, *ps_down, *ps_cine;
 static void *tex_bd, *srv_bd, *rtv_bd;            /* the picture shrunk for the side bars */
+static void *tex_enh, *srv_enh, *rtv_enh, *ps_enh; /* shadows, glow, colour look */
+static float enh_shadow, enh_bloom, enh_look;
+void d3d_set_effects(float shadows, float bloom, int look) { enh_shadow = shadows; enh_bloom = bloom; enh_look = (float)look; }
 
 /* constant buffer, as declared in HLSL_HEAD */
 typedef struct { float rect[4], uvx[4], tsize[2], fsize[2], scale[2], extra, pad; } consts_t;
@@ -232,6 +235,7 @@ static int init2(void *hwnd)
     if (!make_tex(&tex_dith, &srv_dith, &rtv_dith, TW, TH, FMT_R8G8B8A8, 0)) return 0;
     if (!make_tex(&tex_edge, &srv_edge, &rtv_edge, TW, TH, FMT_R8G8B8A8, 0)) return 0;
     if (!make_tex(&tex_bd, &srv_bd, &rtv_bd, TW, TH, FMT_R8G8B8A8, 0)) return 0;
+    if (!make_tex(&tex_enh, &srv_enh, &rtv_enh, TW, TH, FMT_R8G8B8A8, 0)) return 0;
 
     BUF_DESC bd; memset(&bd, 0, sizeof bd);
     bd.ByteWidth = sizeof(consts_t); bd.Usage = USAGE_DYNAMIC; bd.BindFlags = BIND_CB; bd.CPUAccessFlags = CPU_WRITE;
@@ -249,7 +253,7 @@ static int init2(void *hwnd)
         !(ps_xbr = compile(SH_XBR, "xbr", 0)) || !(ps_pixels = compile(SH_PIXELS, "pixels", 0)) ||
         !(ps_crt = compile(SH_CRT, "crt", 0)) || !(ps_copy = compile(SH_COPY, "copy", 0)) ||
         !(ps_back = compile(SH_BACKDROP, "backdrop", 0)) || !(ps_down = compile(SH_DOWN, "down", 0)) ||
-        !(ps_cine = compile(SH_CINE, "cine", 0)))
+        !(ps_cine = compile(SH_CINE, "cine", 0)) || !(ps_enh = compile(SH_ENH, "effects", 0)))
         return 0;
     return 1;
 }
@@ -325,6 +329,11 @@ void d3d_frame(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w,
     }
     float u = (float)W / tw, v = (float)H / th;
     void *src = up_srv;
+    if (up_srv == srv_src && (enh_shadow > 0 || enh_bloom > 0 || enh_look > 0)) {
+        set_consts(-1, 1, 1, -1, u, v, 0, 0, W, H, enh_bloom, enh_look, enh_shadow);
+        pass(rtv_enh, W, H, ps_enh, src, 0);
+        src = srv_enh;
+    }
     if (dither) {
         set_consts(-1, 1, 1, -1, u, v, 0, 0, W, H, 1, 1, 0);
         pass(rtv_dith, W, H, ps_dither, src, 0);

@@ -25,7 +25,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.40"
+#define APP_VERSION_W L"v0.41"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -61,6 +61,7 @@ typedef struct {
     int32_t minimap;                       /* added in 0.34: 0 off, 1 small, 2 large */
     int32_t fog, fast_walk;                /* added in 0.35: minimap fog of war; walking 0 normal, 1 x2 holding B, 2 x2 always */
     int32_t party_hud;                     /* added in 0.39: party portraits with HP / TP at the top left */
+    int32_t fx_shadow, fx_glow, fx_look;   /* added in 0.41: shadows under sprites, glow (0 off, 1 soft, 2 strong); colours 0-3 */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
@@ -80,6 +81,7 @@ typedef struct {
 #define CFG_V15_SIZE (offsetof(cfg_t, minimap))
 #define CFG_V16_SIZE (offsetof(cfg_t, fog))
 #define CFG_V17_SIZE (offsetof(cfg_t, party_hud))
+#define CFG_V18_SIZE (offsetof(cfg_t, fx_shadow))
 static cfg_t C;
 
 /* pad input codes */
@@ -103,7 +105,7 @@ static void cfg_defaults(void)
     C.pad_mode = 0; C.vsync = 1; C.use_gl = 1;
     C.fx_mode = FX_PIXELS; C.fx_dither = 1; C.renderer = 0;
     C.hd_pack = 1; C.hd_auto = 0; C.ws_battle = 1; C.backdrop = 1; C.cine = 1;
-    C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; C.tips = 1; C.shop_help = 1; C.enemy_hp = 1; C.text_speed = 1; C.minimap = 1; C.fog = 1; C.fast_walk = 1; C.party_hud = 1;
+    C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; C.tips = 1; C.shop_help = 1; C.enemy_hp = 1; C.text_speed = 1; C.minimap = 1; C.fog = 1; C.fast_walk = 1; C.party_hud = 1; C.fx_shadow = 1; C.fx_glow = 1; C.fx_look = 0;
     static const uint16_t k[NACT][NKEY] = {
         { VK_UP, 'W' }, { VK_DOWN, 'S' }, { VK_LEFT, 'A' }, { VK_RIGHT, 'D' },
         { 'Z', 'J' }, { 'X', 'K' }, { 'C', VK_SPACE }, { VK_RETURN, 0 },
@@ -196,7 +198,7 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE || n == CFG_V13_SIZE || n == CFG_V14_SIZE || n == CFG_V15_SIZE || n == CFG_V16_SIZE || n == CFG_V17_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE || n == CFG_V13_SIZE || n == CFG_V14_SIZE || n == CFG_V15_SIZE || n == CFG_V16_SIZE || n == CFG_V17_SIZE || n == CFG_V18_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
         memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
         if (n < CFG_V4_SIZE && C.hd) C.fx_mode = FX_SMOOTH;
         if (n < CFG_V5_SIZE) C.renderer = C.use_gl ? 0 : 2;
@@ -210,12 +212,16 @@ static void cfg_load(void)
         if (n < CFG_V15_SIZE) { C.enemy_hp = 1; C.text_speed = 1; }
         if (n < CFG_V16_SIZE) C.minimap = 1;
         if (n < CFG_V17_SIZE) { C.fog = 1; C.fast_walk = 1; }
-        if (n < sizeof C) C.party_hud = 1;
+        if (n < CFG_V18_SIZE) C.party_hud = 1;
+        if (n < sizeof C) { C.fx_shadow = 1; C.fx_glow = 1; C.fx_look = 0; }
     } else if (n >= 20 + 1200 && *(uint32_t *)b == 0x31475043u)   /* version 1 file: keep the ROM path */
         memcpy(C.rom, b + 20, 1200);
     if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
     if (C.renderer < 0 || C.renderer > 2) C.renderer = 0;
     if (C.tone < 0 || C.tone > 2) C.tone = 0;
+    if (C.fx_shadow < 0 || C.fx_shadow > 2) C.fx_shadow = 1;
+    if (C.fx_glow < 0 || C.fx_glow > 2) C.fx_glow = 1;
+    if (C.fx_look < 0 || C.fx_look > 3) C.fx_look = 0;
     if (C.encounters < 0 || C.encounters > 2) C.encounters = 0;
     if (C.exp_mul < 1 || C.exp_mul > 4) C.exp_mul = 1;
     if (C.mes_mul < 1 || C.mes_mul > 4) C.mes_mul = 1;
@@ -1141,6 +1147,23 @@ static void present(void)
             pic = dimmed; ppitch = PW;
         }
     }
+    /* the effects (shadows, glow, colours) need to know which layer drew
+     * each pixel: it travels to the shaders in the alpha channel */
+    {
+        static const float sh[3] = { 0, 0.85f, 1.4f }, gl[3] = { 0, 0.35f, 0.7f };
+        int on = fx_ok && (C.fx_shadow || C.fx_glow || C.fx_look);
+        if (d3d_ok) d3d_set_effects(on ? sh[C.fx_shadow] : 0, on ? gl[C.fx_glow] : 0, on ? C.fx_look : 0);
+        else if (gl_ok) glfx_set_effects(on ? sh[C.fx_shadow] : 0, on ? gl[C.fx_glow] : 0, on ? C.fx_look : 0);
+        if (on && (C.fx_shadow || C.fx_glow) && PW == W && PH == H && W <= MD_W_MAX) {
+            static uint32_t withlayers[MD_W_MAX * 224];
+            static const uint32_t code[8] = { 0, 0x55000000u, 0xAA000000u, 0xFF000000u, 0x88000000u, 0, 0, 0 };
+            const uint8_t *lay = emu_layers();
+            for (int yy = 0; yy < H; yy++)
+                for (int xx = 0; xx < W; xx++)
+                    withlayers[yy * MD_W_MAX + xx] = (pic[(size_t)yy * ppitch + xx] & 0xFFFFFFu) | code[lay[yy * MD_W_MAX + xx] & 7];
+            pic = withlayers; ppitch = MD_W_MAX;
+        }
+    }
     if (d3d_ok) {
         d3d_frame(pic, PW, PH, ppitch, x, y, w, h, cw, ch, cine_on ? FX_CINE : C.fx_mode, C.smooth, cine_on || C.fx_dither, C.backdrop);
         int *rects[16]; int nrects = overlay_rects(rects);
@@ -1789,6 +1812,11 @@ static void build_menu(void)
         add(L"Широкий экран в боях", C.ws_mode ? onoff(C.ws_battle) : L"нужен формат 16:10 или 16:9");
         add(L"Поля по бокам", fx_ok ? (C.backdrop ? L"размытая картинка" : L"чёрные") : L"чёрные");
         add(L"Заставки как на кинескопе", fx_ok ? onoff(C.cine) : L"нужен Direct3D 11 или OpenGL 2.0");
+        { static const wchar_t *lv[3] = { L"выкл", L"мягкие", L"сильные" }, *gw[3] = { L"выкл", L"мягкое", L"сильное" },
+              *lk[4] = { L"обычные", L"живые", L"кино", L"мягкие" };
+          add(L"Тени под персонажами", fx_ok ? lv[C.fx_shadow] : L"нужен Direct3D 11 или OpenGL 2.0");
+          add(L"Свечение ярких мест", fx_ok ? gw[C.fx_glow] : L"нужен Direct3D 11 или OpenGL 2.0");
+          add(L"Цвета", fx_ok ? lk[C.fx_look] : L"нужен Direct3D 11 или OpenGL 2.0"); }
         add(L"HD-пакет графики", L"▸");
         add(L"Назад", 0);
         break; }
@@ -2416,8 +2444,11 @@ static void menu_act(int dir)
         case 8: C.ws_battle = !C.ws_battle; apply_video(); break;
         case 9: C.backdrop = !C.backdrop; break;
         case 10: C.cine = !C.cine; emu_set_cutscene_detect(C.cine); break;
-        case 11: if (!dir) { m_page = M_HD; m_sel = 0; } break;
-        case 12: if (!dir) { m_page = M_SET; m_sel = 0; } break;
+        case 11: C.fx_shadow = (C.fx_shadow + 3 + d) % 3; break;
+        case 12: C.fx_glow = (C.fx_glow + 3 + d) % 3; break;
+        case 13: C.fx_look = (C.fx_look + 4 + d) % 4; break;
+        case 14: if (!dir) { m_page = M_HD; m_sel = 0; } break;
+        case 15: if (!dir) { m_page = M_SET; m_sel = 0; } break;
         }
     } else if (m_page == M_SPEED) {
         int d = dir ? dir : 1;
@@ -2496,7 +2527,7 @@ static void menu_act(int dir)
             set_status(m);
         } break;
         case 5: if (!dir) { CreateDirectoryW(hd_dir, 0); ShellExecuteW(0, L"open", hd_dir, 0, 0, 1); } break;
-        case 6: if (!dir) { m_page = M_VIDEO; m_sel = 11; } break;
+        case 6: if (!dir) { m_page = M_VIDEO; m_sel = 14; } break;
         }
     }
 }
@@ -2505,7 +2536,7 @@ static void menu_back(void)
 {
     if (m_wait_bind >= 0) { m_wait_bind = -1; return; }
     if (m_page == M_MAIN) menu_set_open(0);
-    else if (m_page == M_HD) { m_page = M_VIDEO; m_sel = 11; }
+    else if (m_page == M_HD) { m_page = M_VIDEO; m_sel = 14; }
     else if (m_page == M_BEST) { m_page = M_MAIN; m_sel = 6; }
     else if (m_page == M_PARTY) { m_page = M_MAIN; m_sel = 4; }
     else if (m_page == M_CHAR) { if (m_char_from_panel) menu_set_open(0); else { m_page = M_PARTY; m_sel = m_char; } }
@@ -2871,9 +2902,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.40");
+    diag_init(exe_dir, "0.41");
     diag_info = settings_info;
-    logw("start, version 0.40");
+    logw("start, version 0.41");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {

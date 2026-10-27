@@ -34,7 +34,8 @@ You need your own ROM; the program asks for it on the first start.
 - Direct3D 11 output (flip model) with OpenGL 2.0 / OpenGL ES 2 and GDI fallbacks; shader filters
   shared between HLSL and GLSL: sharp pixels, edge-directed pixel-art smoothing, CRT,
   curved CRT, dither blending, a picture-tube look applied only to story pictures,
-  blurred side bars.
+  blurred side bars; picture effects from the VDP's per-pixel layer map: soft drop
+  shadows under sprites, glow of bright parts (not the game's text boxes), colour looks.
 - HD packs: capture screen layers (F9 or automatically), upscale them with any tool,
   import; tiles are replaced at draw time and recoloured through palette fades.
 - Clock-paced frames with dynamic audio rate control (smooth on 60–360 Hz monitors).

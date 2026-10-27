@@ -24,6 +24,8 @@ void glfx_draw(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w,
                int mode, int bilinear, int dither, int backdrop);
 /* backdrop: fill the bars beside the picture with a blurred copy of it.
  * glfx_cover: the share of the picture (fx, fy) that covers a cw x ch window */
+/* picture effects before the scaling filters: shadow and glow strength 0..1, look 0-3 */
+void glfx_set_effects(float shadows, float bloom, int look);
 void glfx_cover(int w, int h, int cw, int ch, float *fx, float *fy);
 
 #endif

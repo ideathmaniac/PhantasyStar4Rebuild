@@ -134,7 +134,10 @@ static const char *FS_TAIL = "void main() { gl_FragColor = body(); }\n";
 
 /* ---------------------------------------------------------------- setup */
 typedef struct { GLuint prog; GLint src, tsize, fsize, scale, extra, edge; } prog_t;
-static prog_t P_DITHER, P_EDGE, P_XBR, P_PIXELS, P_CRT, P_BACK, P_DOWN, P_CINE;
+static prog_t P_DITHER, P_EDGE, P_XBR, P_PIXELS, P_CRT, P_BACK, P_DOWN, P_CINE, P_ENH;
+static GLuint tex_enh, fbo_enh;
+static float enh_shadow, enh_bloom, enh_look;
+void glfx_set_effects(float shadows, float bloom, int look) { enh_shadow = shadows; enh_bloom = bloom; enh_look = (float)look; }
 static GLuint tex_src, tex_dith, tex_edge, fbo_dith, fbo_edge, tex_bd, fbo_bd;
 static int ready;
 
@@ -228,13 +231,14 @@ int glfx_init(glfx_getproc_t gp)
 #endif
 #undef L
     if (!link(&P_DITHER, SH_DITHER, "dither") || !link(&P_EDGE, SH_EDGE, "edge") || !link(&P_XBR, SH_XBR, "xbr") ||
-        !link(&P_PIXELS, SH_PIXELS, "pixels") || !link(&P_CRT, SH_CRT, "crt") || !link(&P_BACK, SH_BACKDROP, "backdrop") || !link(&P_DOWN, SH_DOWN, "down") || !link(&P_CINE, SH_CINE, "cine"))
+        !link(&P_PIXELS, SH_PIXELS, "pixels") || !link(&P_CRT, SH_CRT, "crt") || !link(&P_BACK, SH_BACKDROP, "backdrop") || !link(&P_DOWN, SH_DOWN, "down") || !link(&P_CINE, SH_CINE, "cine") || !link(&P_ENH, SH_ENH, "effects"))
         return 0;
     new_tex(&tex_src, GL_LINEAR);
     new_tex(&tex_dith, GL_LINEAR);
     new_tex(&tex_edge, GL_NEAREST);
     new_tex(&tex_bd, GL_LINEAR);
-    if (!new_fbo(&fbo_dith, tex_dith) || !new_fbo(&fbo_edge, tex_edge) || !new_fbo(&fbo_bd, tex_bd)) return 0;
+    new_tex(&tex_enh, GL_LINEAR);
+    if (!new_fbo(&fbo_dith, tex_dith) || !new_fbo(&fbo_edge, tex_edge) || !new_fbo(&fbo_bd, tex_bd) || !new_fbo(&fbo_enh, tex_enh)) return 0;
     while (glGetError()) {}
     ready = 1;
     return 1;
@@ -313,6 +317,12 @@ void glfx_draw(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w,
     glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
 
     GLuint src = up;
+    if (up == tex_src && (enh_shadow > 0 || enh_bloom > 0 || enh_look > 0)) {   /* shadows, glow, colour look */
+        use(&P_ENH, src, W, H, enh_bloom, enh_look);
+        pUniform1f(P_ENH.extra, enh_shadow);
+        to_fbo(fbo_enh, W, H);
+        src = tex_enh;
+    }
     if (dither) {
         use(&P_DITHER, src, W, H, 1, 1);
         to_fbo(fbo_dith, W, H);

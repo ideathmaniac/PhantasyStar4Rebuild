@@ -198,6 +198,63 @@ static const char *SH_BACKDROP = FX_COMMON
     "  return float4(acc, 1.0);\n"
     "}\n";
 
+/* picture effects, at the console's resolution before the scaling filters.
+ * The alpha of the picture is the layer that drew each pixel (1/3 plane B,
+ * 2/3 plane A, 0.53 the window, that is the game's text boxes, 1 sprite).
+ * Without the layers (alpha 0 everywhere) there are no shadows and
+ * everything may glow. extra: shadows under sprites (strength), scale.x:
+ * glow of bright parts (strength), scale.y: colour look (0 none, 1 vivid,
+ * 2 film, 3 soft) */
+static const char *SH_ENH = FX_COMMON
+    "float4 body() {\n"
+    "  float2 p = floor(uv * tsize);\n"
+    "  float4 c0 = TEX((p + 0.5) / tsize);\n"
+    "  float3 col = c0.rgb;\n"
+    "  float3 lum = float3(0.299, 0.587, 0.114);\n"
+    "  float isw = step(0.5, c0.a) * step(c0.a, 0.6);\n"   /* a pixel of the window (text boxes) */
+    "  if (extra > 0.0 && c0.a < 0.9 && isw < 0.5) {\n"   /* a soft drop shadow, down and to the right */
+    "    float occ = 0.0;\n"
+    "    for (int j = -1; j <= 1; j++)\n"
+    "      for (int i = -1; i <= 1; i++) {\n"
+    "        float2 q = clamp(p - float2(2.0, 3.0) + float2(float(i), float(j)), float2(0.0, 0.0), fsize - 1.0);\n"
+    "        occ += step(0.9, TEX((q + 0.5) / tsize).a);\n"
+    "      }\n"
+    "    col *= 1.0 - extra * 0.55 * occ / 9.0;\n"
+    "  }\n"
+    "  if (scale.x > 0.0) {\n"                         /* glow: bright parts spread softly */
+    "    float3 g = float3(0.0, 0.0, 0.0); float ws = 0.0;\n"
+    "    for (int j = -3; j <= 3; j++)\n"
+    "      for (int i = -3; i <= 3; i++) {\n"
+    "        float d2 = float(i * i + j * j);\n"
+    "        float w = exp(-d2 / 4.5) * step(d2, 10.5);\n"
+    "        float2 q = clamp(p + float2(float(i), float(j)) * 1.5, float2(0.0, 0.0), fsize - 1.0);\n"
+    "        float4 t = TEX((q + 0.5) / tsize);\n"
+    "        float nw = 1.0 - step(0.5, t.a) * step(t.a, 0.6);\n"   /* text boxes do not glow */
+    "        g += t.rgb * w * nw * smoothstep(0.6, 0.95, dot(t.rgb, lum));\n"
+    "        ws += w;\n"
+    "      }\n"
+    "    col += g / ws * scale.x * 1.4 * (1.0 - isw);\n"
+    "  }\n"
+    "  float look = scale.y;\n"
+    "  if (look > 0.5 && look < 1.5) {\n"              /* vivid: richer colours, a little contrast */
+    "    float l = dot(col, lum);\n"
+    "    col = lerp(float3(l, l, l), col, 1.25);\n"
+    "    col = clamp(col, 0.0, 1.0);\n"
+    "    col = lerp(col, col * col * (3.0 - 2.0 * col), 0.3);\n"
+    "  } else if (look > 1.5 && look < 2.5) {\n"       /* film: contrast, warm lights, cool shadows, darker corners */
+    "    col = clamp(col, 0.0, 1.0);\n"
+    "    col = lerp(col, col * col * (3.0 - 2.0 * col), 0.35);\n"
+    "    float l = dot(col, lum);\n"
+    "    col += lerp(float3(-0.02, 0.0, 0.035), float3(0.05, 0.02, -0.04), l);\n"
+    "    float2 c = uv * tsize / fsize * 2.0 - 1.0;\n"
+    "    col *= 1.0 - 0.18 * dot(c, c);\n"
+    "  } else if (look > 2.5) {\n"                     /* soft: pastel, lifted blacks */
+    "    float l = dot(col, lum);\n"
+    "    col = lerp(float3(l, l, l), col, 0.85) * 0.92 + 0.05;\n"
+    "  }\n"
+    "  return float4(clamp(col, 0.0, 1.0), c0.a);\n"
+    "}\n";
+
 /* plain copy (overlays: menu, messages) */
 static const char *SH_COPY =
     "float4 body() { return float4(TEX(uv).rgb, 1.0); }\n";
