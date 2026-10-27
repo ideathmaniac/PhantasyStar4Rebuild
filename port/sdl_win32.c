@@ -947,9 +947,12 @@ static void touch_layout(int W, int H)
         tb[TB_B]     = (tbtn_t){ tb[TB_C].x - s, tb[TB_C].y + s * 0.35f, rb, "B" };
         tb[TB_A]     = (tbtn_t){ tb[TB_B].x - s, tb[TB_B].y + s * 0.35f, rb, "A" };
         /* the small ones at the edges, clear of the game's windows at the bottom */
-        tb[TB_TURBO] = (tbtn_t){ W - m - rs * 1.4f, tb[TB_C].y - rb - mm(9), rs, "ТУРБО" };
-        tb[TB_START] = (tbtn_t){ W - m - rs * 1.4f, tb[TB_TURBO].y - rs * 3.4f, rs, "START" };
-        tb[TB_MENU]  = (tbtn_t){ W - m - rs * 1.4f, tb[TB_START].y - rs * 3.4f, rs, "МЕНЮ" };   /* the top left is the party panel */
+        tb[TB_TURBO] = (tbtn_t){ W - m - rs * 1.4f, tb[TB_C].y - rb - mm(8), rs, "ТУРБО" };
+        tb[TB_START] = (tbtn_t){ W - m - rs * 1.4f, tb[TB_TURBO].y - rs * 3.2f, rs, "START" };
+        tb[TB_MENU]  = (tbtn_t){ W - m - rs * 1.4f, tb[TB_START].y - rs * 3.2f, rs, "МЕНЮ" };   /* the top left is the party panel */
+        if (tb[TB_MENU].y - rs < H * 0.42f) {   /* keep clear of the minimap at the top right: menu beside Start */
+            tb[TB_MENU].x = tb[TB_START].x - rs * 3.4f; tb[TB_MENU].y = tb[TB_START].y;
+        }
     }
 }
 /* d-pad bits from a point (8 directions, a dead zone in the middle) */

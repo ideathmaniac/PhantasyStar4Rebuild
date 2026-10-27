@@ -22,10 +22,11 @@
 #include "../src/portraits.h"
 #include "../src/png.h"
 #include "ui_soft.h"
+#include "icons.h"
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.41"
+#define APP_VERSION_W L"v0.42"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -62,6 +63,7 @@ typedef struct {
     int32_t fog, fast_walk;                /* added in 0.35: minimap fog of war; walking 0 normal, 1 x2 holding B, 2 x2 always */
     int32_t party_hud;                     /* added in 0.39: party portraits with HP / TP at the top left */
     int32_t fx_shadow, fx_glow, fx_look;   /* added in 0.41: shadows under sprites, glow (0 off, 1 soft, 2 strong); colours 0-3 */
+    int32_t quickbar;                      /* added in 0.42: quick access buttons under the party panel */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
@@ -82,6 +84,7 @@ typedef struct {
 #define CFG_V16_SIZE (offsetof(cfg_t, fog))
 #define CFG_V17_SIZE (offsetof(cfg_t, party_hud))
 #define CFG_V18_SIZE (offsetof(cfg_t, fx_shadow))
+#define CFG_V19_SIZE (offsetof(cfg_t, quickbar))
 static cfg_t C;
 
 /* pad input codes */
@@ -105,7 +108,7 @@ static void cfg_defaults(void)
     C.pad_mode = 0; C.vsync = 1; C.use_gl = 1;
     C.fx_mode = FX_PIXELS; C.fx_dither = 1; C.renderer = 0;
     C.hd_pack = 1; C.hd_auto = 0; C.ws_battle = 1; C.backdrop = 1; C.cine = 1;
-    C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; C.tips = 1; C.shop_help = 1; C.enemy_hp = 1; C.text_speed = 1; C.minimap = 1; C.fog = 1; C.fast_walk = 1; C.party_hud = 1; C.fx_shadow = 1; C.fx_glow = 1; C.fx_look = 0;
+    C.encounters = 0; C.exp_mul = 1; C.mes_mul = 1; C.tips = 1; C.shop_help = 1; C.enemy_hp = 1; C.text_speed = 1; C.minimap = 1; C.fog = 1; C.fast_walk = 1; C.party_hud = 1; C.fx_shadow = 1; C.fx_glow = 1; C.fx_look = 0; C.quickbar = 1;
     static const uint16_t k[NACT][NKEY] = {
         { VK_UP, 'W' }, { VK_DOWN, 'S' }, { VK_LEFT, 'A' }, { VK_RIGHT, 'D' },
         { 'Z', 'J' }, { 'X', 'K' }, { 'C', VK_SPACE }, { VK_RETURN, 0 },
@@ -198,7 +201,7 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE || n == CFG_V13_SIZE || n == CFG_V14_SIZE || n == CFG_V15_SIZE || n == CFG_V16_SIZE || n == CFG_V17_SIZE || n == CFG_V18_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE || n == CFG_V13_SIZE || n == CFG_V14_SIZE || n == CFG_V15_SIZE || n == CFG_V16_SIZE || n == CFG_V17_SIZE || n == CFG_V18_SIZE || n == CFG_V19_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
         memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
         if (n < CFG_V4_SIZE && C.hd) C.fx_mode = FX_SMOOTH;
         if (n < CFG_V5_SIZE) C.renderer = C.use_gl ? 0 : 2;
@@ -213,7 +216,8 @@ static void cfg_load(void)
         if (n < CFG_V16_SIZE) C.minimap = 1;
         if (n < CFG_V17_SIZE) { C.fog = 1; C.fast_walk = 1; }
         if (n < CFG_V18_SIZE) C.party_hud = 1;
-        if (n < sizeof C) { C.fx_shadow = 1; C.fx_glow = 1; C.fx_look = 0; }
+        if (n < CFG_V19_SIZE) { C.fx_shadow = 1; C.fx_glow = 1; C.fx_look = 0; }
+        if (n < sizeof C) C.quickbar = 1;
     } else if (n >= 20 + 1200 && *(uint32_t *)b == 0x31475043u)   /* version 1 file: keep the ROM path */
         memcpy(C.rom, b + 20, 1200);
     if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
@@ -992,19 +996,43 @@ static void fill(int x, int y, int w, int h, DWORD color)
     DeleteObject(b);
 }
 
+/* one of the icons of icons.h, size x size pixels (the 12 x 12 mask scaled) */
+static void draw_icon(int x0, int y0, int size, int id, int dim)
+{
+    if (id <= IC_NONE || id >= IC_COUNT || !ICONS[id].rows[0] || size < 6) return;
+    uint32_t c = ICONS[id].color, *dst = (uint32_t *)back_bits;
+    int r = (c >> 16) & 255, g = (c >> 8) & 255, b = c & 255;
+    if (dim) { r = r * 3 / 5; g = g * 3 / 5; b = b * 3 / 5; }
+    uint32_t ink = (uint32_t)r << 16 | (uint32_t)g << 8 | (uint32_t)b;
+    uint32_t light = (uint32_t)(r * 3 / 5 + 38) << 16 | (uint32_t)(g * 3 / 5 + 38) << 8 | (uint32_t)(b * 3 / 5 + 38);
+    for (int y = 0; y < size; y++) {
+        int yy = y0 + y; if (yy < 0 || yy >= back_h) continue;
+        const char *row = ICONS[id].rows[y * 12 / size];
+        for (int x = 0; x < size; x++) {
+            int xx = x0 + x; if (xx < 0 || xx >= back_w) continue;
+            char ch = row[x * 12 / size];
+            if (ch == '#') dst[(size_t)yy * back_w + xx] = ink;
+            else if (ch == '+') dst[(size_t)yy * back_w + xx] = light;
+        }
+    }
+}
+
 static void draw_menu(void);
 static void draw_status(void);
 static int menu_rect[4], status_rect[4], tip_rect[4], ach_rect[4], hp_rect[4], mm_rect[4];   /* x, y, w, h of overlay boxes drawn this frame */
-static int party_rect[5][4];
+static int party_rect[5][4], quick_rect[4], qtip_rect[4], quick_bottom;
+static int g_mouse_x = -1, g_mouse_y = -1;
 /* every overlay box of this frame, for copying over the picture */
 static int overlay_rects(int **r)
 {
     int n = 0;
     r[n++] = menu_rect; r[n++] = status_rect; r[n++] = tip_rect; r[n++] = ach_rect; r[n++] = hp_rect; r[n++] = mm_rect;
     for (int k = 0; k < 5; k++) r[n++] = party_rect[k];
+    r[n++] = quick_rect; r[n++] = qtip_rect;
     return n;
 }
 static void draw_party(int px, int py, int pw, int ph);
+static void draw_quickbar(int py);
 static void draw_tip(int px, int py, int pw, int ph);
 static void draw_shop(int px, int py, int pw, int ph);
 static void draw_enemy_hp(int px, int py, int pw, int ph);
@@ -1104,6 +1132,7 @@ static void present(void)
     /* overlays are drawn with GDI into the back buffer, then copied */
     menu_rect[2] = status_rect[2] = tip_rect[2] = ach_rect[2] = hp_rect[2] = mm_rect[2] = 0;
     for (int k = 0; k < 5; k++) party_rect[k][2] = 0;
+    quick_rect[2] = 0; qtip_rect[2] = 0; quick_bottom = 0;
     if (launcher_open) draw_launcher(cw, ch);
     else if (world_open && !menu_open) draw_world(cw, ch);
     else if (!menu_open) {
@@ -1112,6 +1141,7 @@ static void present(void)
         if (C.enemy_hp && !tip_rect[2]) draw_enemy_hp(x, y, w, h);   /* the technique panel uses the top in battle */
         if (C.minimap && !tip_rect[2]) draw_minimap(x, y, w, h);
         if (C.party_hud) draw_party(x, y, w, h);
+        if (C.quickbar) draw_quickbar(y);
     }
     if (!launcher_open) draw_ach_toast();
     if (menu_open || status_msg[0]) {
@@ -1537,10 +1567,57 @@ static void draw_party(int px, int py, int pw, int ph)
         fill(x0, ty, s, tp, RGBC(22, 28, 60));
         if (tpm > 0) { int tv = tpv < 0 ? 0 : tpv > tpm ? tpm : tpv; fill(x0, ty, s * tv / tpm, tp, RGBC(86, 150, 255)); }
         party_rect[k][0] = bx; party_rect[k][1] = by; party_rect[k][2] = bw; party_rect[k][3] = bhh;
+        quick_bottom = by + bhh;
         y += bhh + gap;
         if (y + bhh > back_h) break;
     }
 }
+
+/* quick access buttons, under the party panel (or at the top left without it):
+ * journal, bestiary, world map, where next, party, save, the pause menu */
+static const struct { int icon; const wchar_t *name; } QB[7] = {
+    { IC_BOOK, L"Журнал" }, { IC_SKULL, L"Бестиарий" }, { IC_MAP, L"Карта мира" }, { IC_COMPASS, L"Куда идти" },
+    { IC_PARTY, L"Отряд" }, { IC_SAVE, L"Сохранить" }, { IC_MENU, L"Меню" } };
+static int qb_x[7], qb_y[7], qb_s;
+static void draw_quickbar(int py)
+{
+    int m = emu_game_mode_top();
+    if (m != 0x0C && m != 0x14) return;
+    int s = font_h * 7 / 4; if (s < 24) s = 24;
+    int gap = font_h / 4 + 1, cols = 4;
+    int x0 = font_h / 2, y0 = quick_bottom ? quick_bottom + font_h / 2 : (py > font_h / 2 ? py : font_h / 2) + 3;
+    if (y0 + 2 * (s + gap) > back_h) return;
+    qb_s = s;
+    int hover = -1;
+    { int pw = cols * (s + gap) - gap, ph = 2 * (s + gap) - gap;   /* the panel under the buttons, gaps included */
+      fill(x0 - 3, y0 - 3, pw + 6, ph + 6, RGBC(14, 16, 30)); }
+    for (int k = 0; k < 7; k++) {
+        int x = x0 + (k % cols) * (s + gap), y = y0 + (k / cols) * (s + gap);
+        qb_x[k] = x; qb_y[k] = y;
+        int on = g_mouse_x >= x && g_mouse_x < x + s && g_mouse_y >= y && g_mouse_y < y + s;
+        if (on) hover = k;
+        fill(x, y, s, s, on ? RGBC(70, 96, 170) : RGBC(18, 24, 52));
+        fill(x, y, s, 1, RGBC(92, 104, 150)); fill(x, y + s - 1, s, 1, RGBC(10, 12, 26));
+        int isz = s * 2 / 3;
+        draw_icon(x + (s - isz) / 2, y + (s - isz) / 2, isz, QB[k].icon, 0);
+    }
+    int w = cols * (s + gap) - gap, h = 2 * (s + gap) - gap;
+    quick_rect[0] = x0 - 3; quick_rect[1] = y0 - 3; quick_rect[2] = w + 6; quick_rect[3] = h + 6;
+    if (hover >= 0) {   /* the name of the button under the mouse */
+        int tw = text_w(QB[hover].name, font_small) + font_h, th = font_h + 4;
+        int tx = x0 + w + font_h / 3, ty = qb_y[hover] + (s - th) / 2;
+        fill(tx, ty, tw, th, RGBC(16, 28, 74));
+        draw_text(tx + font_h / 2, ty + 2, QB[hover].name, RGBC(255, 240, 180), font_small);
+        qtip_rect[0] = tx; qtip_rect[1] = ty; qtip_rect[2] = tw; qtip_rect[3] = th;
+    }
+}
+static int quickbar_hit(int mx, int my)
+{
+    if (!quick_rect[2]) return -1;
+    for (int k = 0; k < 7; k++) if (mx >= qb_x[k] && mx < qb_x[k] + qb_s && my >= qb_y[k] && my < qb_y[k] + qb_s) return k;
+    return -1;
+}
+static void quickbar_act(int k);
 
 static void draw_enemy_hp(int px, int py, int pw, int ph)
 {
@@ -1621,17 +1698,27 @@ static int m_save_load;                     /* M_SAVE lists slots to load (1) or
 static int m_page, m_sel, m_wait_bind = -1;   /* action index waiting for a key / pad input */
 static int m_confirm_quit;
 
-typedef struct { wchar_t label[80]; wchar_t value[80]; } item_t;
+typedef struct { wchar_t label[80]; wchar_t value[80]; int icon, info; } item_t;   /* info: text only, not selectable */
 static item_t items[64];
 static int nitems;
 static wchar_t m_title[80];
 
+static int m_icon, m_info;   /* for the next add(): its icon, and whether it is a text-only line */
 static void add(const wchar_t *l, const wchar_t *v)
 {
     if (nitems >= 64) return;
     wcsncpy(items[nitems].label, l, 79); items[nitems].label[79] = 0;
     wcsncpy(items[nitems].value, v ? v : L"", 79); items[nitems].value[79] = 0;
+    items[nitems].icon = m_icon; items[nitems].info = m_info;
+    m_icon = 0; m_info = 0;
     nitems++;
+}
+static void add_i(int icon, const wchar_t *l, const wchar_t *v) { m_icon = icon; add(l, v); }
+static void add_info(int icon, const wchar_t *l, const wchar_t *v) { m_icon = icon; m_info = 1; add(l, v); }
+/* the selection moves over text-only lines */
+static void menu_step(int d)
+{
+    for (int t = 0; t < nitems; t++) { m_sel = (m_sel + nitems + d) % nitems; if (!items[m_sel].info) break; }
 }
 
 static const wchar_t *onoff(int v) { return v ? L"вкл" : L"выкл"; }
@@ -1687,38 +1774,55 @@ static void build_char_card(void)
     wchar_t nm[40]; ui_ps4_name(c, nm, 40);
     uint32_t exp = (uint32_t)c[10] << 24 | (uint32_t)c[11] << 16 | (uint32_t)c[12] << 8 | c[13];
     _snwprintf(m_title, 79, L"%ls — уровень %d, опыт %lu", nm, c[8] << 8 | c[9], (unsigned long)exp); m_title[79] = 0;
-    wcscpy(lab[nr], L"ЕЖ / ЕТ");
+    { /* experience to the next level: the game's own growth table (as on its status screen):
+       * per character a first level ($05D846) and a table pointer ($05D852), 22-byte rows whose
+       * first long is the experience needed for the next level */
+      int lv = c[8] << 8 | c[9];
+      if (lv >= 99) { wcscpy(lab[nr], L"Уровень"); m_icon = IC_UP; m_info = 1; ROW(0, 0, L"%ls", L"максимальный"); }
+      else if (g_rom_size > 0x2B0000) {
+          int base = g_rom[0x05D846 + rec];
+          uint32_t tab = (uint32_t)g_rom[0x05D852 + rec * 4] << 24 | (uint32_t)g_rom[0x05D853 + rec * 4] << 16 | (uint32_t)g_rom[0x05D854 + rec * 4] << 8 | g_rom[0x05D855 + rec * 4];
+          uint32_t row = tab + (uint32_t)(lv - base) * 22;
+          if (lv >= base && row + 4 < g_rom_size) {
+              uint32_t need = (uint32_t)g_rom[row] << 24 | (uint32_t)g_rom[row + 1] << 16 | (uint32_t)g_rom[row + 2] << 8 | g_rom[row + 3];
+              _snwprintf(lab[nr], 79, L"До уровня %d", lv + 1); lab[nr][79] = 0;
+              m_icon = IC_UP; m_info = 1; ROW(0, 0, L"%lu опыта", (unsigned long)(need > exp ? need - exp : 0));
+          }
+      }
+    }
+    wcscpy(lab[nr], L"ЕЖ / ЕТ"); m_icon = IC_HEART; m_info = 1;
     ROW(0, 0, L"%d/%d · %d/%d", (int16_t)(c[14] << 8 | c[15]), c[16] << 8 | c[17], (int16_t)(c[18] << 8 | c[19]), c[20] << 8 | c[21]);
-    wcscpy(lab[nr], L"Атака / защита");
+    wcscpy(lab[nr], L"Атака / защита"); m_icon = IC_SWORD; m_info = 1;
     ROW(0, 0, L"%d / %d", c[0x24] << 8 | c[0x25], c[0x28] << 8 | c[0x29]);
-    wcscpy(lab[nr], L"Сила · разум · ловкость · меткость");
+    wcscpy(lab[nr], L"Сила · разум · ловкость · меткость"); m_icon = IC_FIST; m_info = 1;
     ROW(0, 0, L"%d · %d · %d · %d", c[0x18], c[0x1B], c[0x1E], c[0x21]);
     static const wchar_t *slot[4] = { L"Правая рука", L"Левая рука", L"Голова", L"Тело" };
+    static const int slot_icon[4] = { IC_HAND, IC_SHIELD, IC_HELM, IC_ARMOR };
     for (int k = 0; k < 4; k++) {
         int id = c[0x4C + k];
-        shop_t it; wcscpy(lab[nr], slot[k]);
+        shop_t it; wcscpy(lab[nr], slot[k]); m_icon = slot_icon[k];
         if (id && shop_item(id, &it)) {
             wchar_t w[48]; MultiByteToWideChar(65001, 0, it.name, -1, w, 48);
             if (it.atk && it.def) ROW(3, id, L"%ls (атака %d, защита %d)", w, it.atk, it.def);
             else if (it.atk) ROW(3, id, L"%ls (атака %d)", w, it.atk);
             else if (it.def) ROW(3, id, L"%ls (защита %d)", w, it.def);
             else ROW(3, id, L"%ls", w);
-        } else ROW(0, 0, L"—");
+        } else { m_info = 1; ROW(0, 0, L"—"); }
     }
     /* techniques ($52, 16 ids + 1) and skills ($62, 8 ids + 1, last first) */
     for (int i = 0; i < 16; i++) {
         int id = c[0x52 + i]; tip_t t;
         if (!id || !tips_info(0, id - 1, &t)) continue;
         MultiByteToWideChar(65001, 0, t.name, -1, lab[nr], 80);
-        if (!nr || m_row_kind[nitems - 1] != 1) { wchar_t h[80]; _snwprintf(h, 79, L"Техники: %ls", lab[nr]); h[79] = 0; wcscpy(lab[nr], h); }
+        m_icon = IC_SPARK;
         ROW(1, id - 1, L"%d ЕТ  ▸", t.cost);
     }
     for (int i = 7; i >= 0; i--) {
         int id = c[0x62 + i]; tip_t t;
         if (!id || !tips_info(1, id - 1, &t)) continue;
         MultiByteToWideChar(65001, 0, t.name, -1, lab[nr], 80);
-        if (m_row_kind[nitems - 1] != 2) { wchar_t h[80]; _snwprintf(h, 79, L"Навыки: %ls", lab[nr]); h[79] = 0; wcscpy(lab[nr], h); }
-        ROW(2, id - 1, L"▸");
+        m_icon = IC_STAR;
+        ROW(2, id - 1, L"навык  ▸");
     }
     /* the bag: what this character can wear, and what it would change */
     int seen[256] = { 0 }, first = 1;
@@ -1730,6 +1834,7 @@ static void build_char_card(void)
             if (k != m_char || !w->can || w->same) continue;
             wchar_t nmw[48]; MultiByteToWideChar(65001, 0, it.name, -1, nmw, 48);
             _snwprintf(lab[nr], 79, first ? L"Можно надеть: %ls" : L"%ls", nmw); lab[nr][79] = 0; first = 0;
+            m_icon = IC_BAG;
             ROW(3, id, L"атака %+d, защита %+d", w->datk, w->ddef);
         }
     }
@@ -1761,23 +1866,32 @@ static void char_card_act(int i)
     t[399] = 0; set_status(t);
 }
 
+static void build_menu_pages(void);
+/* the current page's lines; the selection never rests on a text-only line */
 static void build_menu(void)
+{
+    build_menu_pages();
+    if (m_sel >= nitems) m_sel = nitems - 1;
+    if (m_sel < 0) m_sel = 0;
+    if (nitems && items[m_sel].info) menu_step(1);
+}
+static void build_menu_pages(void)
 {
     nitems = 0;
     wchar_t v[80];
     switch (m_page) {
     case M_MAIN:
         wcscpy(m_title, L"Пауза");
-        add(L"Продолжить", 0);
-        add(L"Сохранить", L"▸");
-        add(L"Загрузить", L"▸");
-        add(L"Настройки", L"▸");
-        add(L"Отряд: снаряжение, техники, характеристики", L"▸");
-        add(L"Журнал: статистика, достижения, карта", L"▸");
-        add(L"Бестиарий", L"▸");
-        add(L"Справка", L"▸");
-        add(L"Выйти в главное меню", 0);
-        add(m_confirm_quit ? L"Выйти? Нажмите ещё раз" : L"Выход", 0);
+        add_i(IC_PLAY, L"Продолжить", 0);
+        add_i(IC_SAVE, L"Сохранить", L"▸");
+        add_i(IC_LOAD, L"Загрузить", L"▸");
+        add_i(IC_GEAR, L"Настройки", L"▸");
+        add_i(IC_PARTY, L"Отряд: снаряжение, техники, характеристики", L"▸");
+        add_i(IC_BOOK, L"Журнал: статистика, достижения, карта", L"▸");
+        add_i(IC_SKULL, L"Бестиарий", L"▸");
+        add_i(IC_HELP, L"Справка", L"▸");
+        add_i(IC_HOME, L"Выйти в главное меню", 0);
+        add_i(IC_EXIT, m_confirm_quit ? L"Выйти? Нажмите ещё раз" : L"Выход", 0);
         break;
     case M_VIDEO: {
         static const wchar_t *wsn[3] = { L"4:3 (оригинал)", L"16:10", L"16:9" };
@@ -1823,21 +1937,21 @@ static void build_menu(void)
     case M_STATS: {
         wcscpy(m_title, L"Журнал");
         static wchar_t a[80], b2[80], c[80], d[80], e[80];
-        fmt_time(a, 79, ST.play_frames); add(L"Время в игре (всего)", a);
-        fmt_time(b2, 79, session_frames); add(L"За этот запуск", b2);
+        fmt_time(a, 79, ST.play_frames); add_info(IC_CLOCK, L"Время в игре (всего)", a);
+        fmt_time(b2, 79, session_frames); add_info(IC_CLOCK, L"За этот запуск", b2);
         _snwprintf(c, 79, L"%llu", (unsigned long long)ST.battles);
-        add(L"Боёв", c);
+        add_info(IC_SWORDS, L"Боёв", c);
         static wchar_t bt[80]; fmt_time(bt, 79, ST.battle_frames);
-        add(L"Время в боях", bt);
+        add_info(IC_CLOCK, L"Время в боях", bt);
         int m = emu_game_mode_top();
         if (m == 0x0C || m == 0x14) _snwprintf(d, 79, L"%lu", (unsigned long)emu_meseta()); else wcscpy(d, L"—");
-        add(L"Месеты сейчас", d);
+        add_info(IC_COIN, L"Месеты сейчас", d);
         _snwprintf(e, 79, L"%llu / %llu", (unsigned long long)ST.saves, (unsigned long long)ST.loads);
-        add(L"Быстрых сохранений / загрузок", e);
+        add_info(IC_SAVE, L"Быстрых сохранений / загрузок", e);
         { static wchar_t a2[40]; int got = 0; for (int i = 0; i < NACH; i++) got += ach_time[i] != 0;
-          _snwprintf(a2, 39, L"%d из %d  ▸", got, NACH); add(L"Достижения", a2); }
-        add(L"Карта мира (клавиша N)", L"▸");
-        add(L"Куда идти дальше", L"▸");
+          _snwprintf(a2, 39, L"%d из %d  ▸", got, NACH); add_i(IC_TROPHY, L"Достижения", a2); }
+        add_i(IC_MAP, L"Карта мира (клавиша N)", L"▸");
+        add_i(IC_COMPASS, L"Куда идти дальше", L"▸");
         add(L"Назад", 0);
         break; }
     case M_PARTY: {
@@ -1850,6 +1964,7 @@ static void build_menu(void)
             if (rec == 0xFF || rec > 10) break;
             const uint8_t *c = r + 0xF500 + rec * 0x80;
             ui_ps4_name(c, lab[k], 40);
+            m_icon = IC_PARTY;
             _snwprintf(val[k], 59, L"ур. %d · ЕЖ %d/%d · ЕТ %d/%d  ▸", c[8] << 8 | c[9], (int16_t)(c[14] << 8 | c[15]), c[16] << 8 | c[17],
                        (int16_t)(c[18] << 8 | c[19]), c[20] << 8 | c[21]); val[k][59] = 0;
             add(lab[k], val[k]); n++;
@@ -1867,11 +1982,11 @@ static void build_menu(void)
             int take = len - pos < 60 ? len - pos : 60;
             if (pos + take < len) { int k = take; while (k > 30 && t[pos + k] != L' ') k--; if (k > 30) take = k; }
             wcsncpy(rows[nr], t + pos, (size_t)take); rows[nr][take] = 0;
-            add(rows[nr], 0); nr++;
+            add_info(0, rows[nr], 0); nr++;
             pos += take; while (pos < len && t[pos] == L' ') pos++;
         }
-        add(L"", 0);
-        add(L"Подсказка по составу отряда и ключевым предметам (прохождение PSCave).", 0);
+        add_info(0, L"", 0);
+        add_info(0, L"Подсказка по составу отряда и ключевым предметам (прохождение PSCave).", 0);
         add(L"Назад", 0);
         break; }
     case M_ACH: {
@@ -1964,6 +2079,7 @@ static void build_menu(void)
         { static const wchar_t *mm[3] = { L"выкл", L"маленькая", L"большая" }; add(L"Миникарта (клавиша M)", mm[C.minimap]); }
         add(L"Миникарта: только пройденное", onoff(C.fog));
         add(L"Панель отряда (портреты, ЕЖ, ЕТ)", onoff(C.party_hud));
+        add(L"Кнопки быстрого доступа", onoff(C.quickbar));
         add(L"Назад", 0);
         break;
     case M_SPEED: {
@@ -2361,8 +2477,10 @@ static void draw_menu(void)
     for (int i = first; i < nitems && i - first < rows && item_count < 64; i++) {
         int yy = py + lh * 2 + (i - first) * lh;
         item_y[item_count++] = yy;
-        if (i == m_sel) fill(px + font_h / 2, yy - 2, lw - font_h, lh, RGBC(60, 90, 170));
-        draw_text(px + font_h, yy, items[i].label, i == m_sel ? RGBC(255, 255, 160) : RGBC(225, 230, 255), font_small);
+        if (i == m_sel && !items[i].info) fill(px + font_h / 2, yy - 2, lw - font_h, lh, RGBC(60, 90, 170));
+        int tx = px + font_h;
+        if (items[i].icon) { int isz = font_h * 9 / 10; draw_icon(tx, yy + (lh - isz) / 2 - 2, isz, items[i].icon, 0); tx += isz + font_h / 2; }
+        draw_text(tx, yy, items[i].label, items[i].info ? RGBC(200, 208, 236) : i == m_sel ? RGBC(255, 255, 160) : RGBC(225, 230, 255), font_small);
         if (items[i].value[0]) {
             int tw = text_w(items[i].value, font_small);
             draw_text(px + lw - font_h - tw, yy, items[i].value, RGBC(160, 220, 255), font_small);
@@ -2418,7 +2536,8 @@ static void menu_act(int dir)
         case 3: C.minimap = (C.minimap + 3 + (dir ? dir : 1)) % 3; break;
         case 4: C.fog = !C.fog; emu_set_fog(C.fog); break;
         case 5: C.party_hud = !C.party_hud; break;
-        case 6: if (!dir) { m_page = M_SET; m_sel = 3; } break;
+        case 6: C.quickbar = !C.quickbar; break;
+        case 7: if (!dir) { m_page = M_SET; m_sel = 3; } break;
         }
     } else if (m_page == M_VIDEO) {
         int d = dir ? dir : 1;
@@ -2563,8 +2682,8 @@ static void menu_key(int vk)
     if (m_wait_bind >= 0) { if (vk == VK_ESCAPE) m_wait_bind = -1; return; }
     build_menu();
     switch (vk) {
-    case VK_UP: m_sel = (m_sel + nitems - 1) % nitems; break;
-    case VK_DOWN: m_sel = (m_sel + 1) % nitems; break;
+    case VK_UP: menu_step(-1); break;
+    case VK_DOWN: menu_step(1); break;
     case VK_LEFT: menu_act(-1); break;
     case VK_RIGHT: menu_act(1); break;
     case VK_RETURN: case VK_SPACE: menu_act(0); break;
@@ -2594,8 +2713,8 @@ static void menu_pad(void)
     }
     if (m_wait_bind >= 0) return;
     build_menu();
-    if (ppressed(A_UP)) m_sel = (m_sel + nitems - 1) % nitems;
-    if (ppressed(A_DOWN)) m_sel = (m_sel + 1) % nitems;
+    if (ppressed(A_UP)) menu_step(-1);
+    if (ppressed(A_DOWN)) menu_step(1);
     if (ppressed(A_LEFT)) menu_act(-1);
     if (ppressed(A_RIGHT)) menu_act(1);
     if (ppressed(A_C) || ppressed(A_START)) menu_act(0);
@@ -2678,7 +2797,7 @@ static int menu_hit(int mx, int my)
 {
     if (!menu_open || mx < item_x0 || mx >= item_x1) return -1;
     for (int k = 0; k < item_count; k++)
-        if (my >= item_y[k] - 2 && my < item_y[k] - 2 + item_h) return item_first + k;
+        if (my >= item_y[k] - 2 && my < item_y[k] - 2 + item_h) return items[item_first + k].info ? -1 : item_first + k;
     return -1;
 }
 
@@ -2761,6 +2880,19 @@ static void sizemove_tick(void)
     for (int k = 0; k < 3 && pace_due(0); k++) game_frames(0);
 }
 
+static void quickbar_act(int k)
+{
+    switch (k) {
+    case 0: menu_set_open(1); m_page = M_STATS; m_sel = 6; break;
+    case 1: menu_set_open(1); m_page = M_BEST; m_best_page = 0; m_sel = 0; break;
+    case 2: world_open = 1; break;
+    case 3: menu_set_open(1); m_page = M_GOAL; m_sel = 0; break;
+    case 4: menu_set_open(1); m_page = M_PARTY; m_sel = 0; break;
+    case 5: menu_set_open(1); slots_refresh(); m_save_load = 0; m_page = M_SAVE; m_sel = C.slot - 1; break;
+    case 6: menu_set_open(1); break;
+    }
+}
+
 /* the "running" marker (see Start) and the phone's background: Android ends
  * a program in the background without warning, so everything a clean exit
  * writes is written when the app goes there (port/sdl_win32.c posts these) */
@@ -2787,6 +2919,7 @@ static LRESULT wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         }
         break;
     case WM_MOUSEMOVE: {
+        g_mouse_x = mx; g_mouse_y = my;
         static int lx = -1, ly = -1;
         if (mx == lx && my == ly) return 0;     /* Windows repeats this message without movement */
         lx = mx; ly = my;
@@ -2801,6 +2934,7 @@ static LRESULT wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_LBUTTONDOWN:
         if (menu_open && m_wait_bind < 0) { int i = menu_hit(mx, my); if (i >= 0) { m_sel = i; menu_act(0); } }
         else if (launcher_open) { int k = launcher_hit(mx, my); if (k >= 0 && (l_page || l_enabled(k))) launcher_act(k); }
+        else if (!world_open && quickbar_hit(mx, my) >= 0) quickbar_act(quickbar_hit(mx, my));
         else if (!world_open)
             for (int k = 0; k < 5; k++) {   /* a portrait of the party panel: that character's card */
                 int *pr = party_rect[k];
@@ -2816,7 +2950,7 @@ static LRESULT wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
         if (menu_open && m_wait_bind < 0) {
             build_menu();
             int d = (short)((w >> 16) & 0xFFFF);
-            m_sel = (m_sel + nitems + (d > 0 ? -1 : 1)) % nitems;
+            menu_step(d > 0 ? -1 : 1);
         }
         return 0;
     case WM_ENTERSIZEMOVE: in_sizemove = 1; SetTimer(h, 1, 8, 0); return 0;
@@ -2902,9 +3036,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.41");
+    diag_init(exe_dir, "0.42");
     diag_info = settings_info;
-    logw("start, version 0.41");
+    logw("start, version 0.42");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
