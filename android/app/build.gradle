@@ -17,10 +17,24 @@ android {
     }
     externalNativeBuild { ndkBuild { path 'jni/Android.mk' } }
     sourceSets { main { java.srcDirs = ['src/main/java', 'jni/SDL/android-project/app/src/main/java'] } }
+    // A fixed key (secrets ANDROID_KEYSTORE / ANDROID_KEY_PASSWORD, decoded
+    // by the workflow) lets a new APK install over the old one, keeping the
+    // saves. Without it the build is signed with a throwaway debug key.
+    def ks = System.getenv('ANDROID_KEYSTORE_FILE')
+    signingConfigs {
+        fixed {
+            if (ks) {
+                storeFile file(ks)
+                storePassword System.getenv('ANDROID_KEY_PASSWORD')
+                keyAlias 'ps4'
+                keyPassword System.getenv('ANDROID_KEY_PASSWORD')
+            }
+        }
+    }
     buildTypes {
         release {
             minifyEnabled false
-            signingConfig signingConfigs.debug   // installable as is; not for an app store
+            signingConfig ks ? signingConfigs.fixed : signingConfigs.debug   // installable as is; not for an app store
         }
     }
     compileOptions {

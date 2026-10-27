@@ -20,8 +20,13 @@ jobs:
         run: git clone --depth 1 -b release-2.30.9 https://github.com/libsdl-org/SDL android/app/jni/SDL
       - name: fonts
         run: python3 tools/embed_fonts.py android/app/jni/fonts.c
+      - name: signing key
+        env: { KS: '${{ secrets.ANDROID_KEYSTORE }}' }
+        run: |
+          if [ -n "$KS" ]; then echo "$KS" | base64 -d > $RUNNER_TEMP/ps4.jks; echo "ANDROID_KEYSTORE_FILE=$RUNNER_TEMP/ps4.jks" >> $GITHUB_ENV; fi
       - name: build
         working-directory: android
+        env: { ANDROID_KEY_PASSWORD: '${{ secrets.ANDROID_KEY_PASSWORD }}' }
         run: gradle --no-daemon assembleRelease
       - run: cp android/app/build/outputs/apk/release/app-release.apk PS4_Recomp_Android.apk
       - uses: actions/upload-artifact@v4
