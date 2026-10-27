@@ -11,6 +11,7 @@
  *   threads and events    -> SDL threads, mutexes and conditions
  *   files                 -> POSIX, "\" in paths becomes "/"
  */
+#define PORT_GL_IMPL
 #include "win32.h"
 #include <SDL.h>
 #include <sys/stat.h>
@@ -383,7 +384,7 @@ static glyph_t *glyph(fontobj_t *o, wchar_t c)
  * OpenGL ES underneath on phones), shown when the DC is released. */
 static SDL_Window *win;
 static SDL_Renderer *ren; static SDL_Texture *t_frame, *t_ovl; static int tf_w, tf_h, to_w, to_h, ren_dirty;
-#if defined(__ANDROID__) || defined(PS4_NO_GL)
+#if defined(PS4_NO_GL)
 static int no_gl = 1;
 #else
 static int no_gl;
@@ -405,6 +406,23 @@ static SDL_Texture *stream_tex(SDL_Texture **t, int *tw, int *th, int w, int h)
     return *t;
 }
 static void touch_draw(void);
+static void touch_draw_gl(void);
+static int gles_active;     /* an OpenGL ES context drives the picture (PS4_GLES) */
+static void layout(int *W, int *H, int *gh);
+static int can_panel(void) { return ren != 0 || gles_active; }
+void gles_set_offset(int x, int y); int gles_init(void); void *gles_proc(const char *name);
+/* first drawing of a frame on the renderer: clear everything, then keep to
+ * the picture's part of the window */
+static void ren_frame(void)
+{
+    if (ren_dirty) return;
+    int W, H, gh; layout(&W, &H, &gh);
+    SDL_RenderSetViewport(ren, 0);
+    SDL_SetRenderDrawColor(ren, 0, 0, 0, 255);
+    SDL_RenderClear(ren);
+    SDL_Rect g = { 0, 0, W, gh };
+    SDL_RenderSetViewport(ren, &g);
+}
 enum { OBJ_BITMAP = 1, OBJ_FONT, OBJ_BRUSH, OBJ_DC };
 typedef struct { int kind; int w, h; uint32_t *px; } bitmap_t;
 typedef struct { int kind; DWORD color; } brush_t;
@@ -461,6 +479,7 @@ int FillRect(HDC d, const RECT *r, HBRUSH br)
     dc_t *c = d; bitmap_t *b = c ? c->bm : 0;
     if (c && c->window) {
         if (!renderer()) return 0;
+        ren_frame();
         DWORD k = ((brush_t *)br)->color;
         SDL_SetRenderDrawColor(ren, k & 255, (k >> 8) & 255, (k >> 16) & 255, 255);
         SDL_Rect q = { r->left, r->top, r->right - r->left, r->bottom - r->top };
@@ -559,6 +578,7 @@ int StretchDIBits(HDC d, int dx, int dy, int dw, int dh, int sx, int sy, int sw,
     int W = bi->bmiHeader.biWidth, H = bi->bmiHeader.biHeight;
     if (c && c->window) {
         if (!renderer() || !stream_tex(&t_frame, &tf_w, &tf_h, W, H < 0 ? -H : H)) return 0;
+        ren_frame();
         SDL_Rect sr = { sx, sy, sw, sh }, dr = { dx, dy, dw, dh };
         SDL_UpdateTexture(t_frame, &sr, (const uint32_t *)bits + (size_t)sy * W + sx, W * 4);
         SDL_SetTextureScaleMode(t_frame, stretch_mode == HALFTONE ? SDL_ScaleModeLinear : SDL_ScaleModeNearest);
@@ -577,6 +597,7 @@ BOOL StretchBlt(HDC d, int dx, int dy, int dw, int dh, HDC s, int sx, int sy, in
     if (a && a->window) {
         bitmap_t *m = b->bm;
         if (!renderer() || !stream_tex(&t_ovl, &to_w, &to_h, m->w, m->h)) return 0;
+        ren_frame();
         if (sx < 0 || sy < 0 || sx + sw > m->w || sy + sh > m->h) return 0;
         SDL_Rect sr = { sx, sy, sw, sh }, dr = { dx, dy, dw, dh };
         SDL_UpdateTexture(t_ovl, &sr, m->px + (size_t)sy * m->w + sx, m->w * 4);
@@ -600,10 +621,16 @@ HWND CreateWindowExW(DWORD ex, LPCWSTR cls, LPCWSTR title, DWORD style, int x, i
     (void)ex; (void)cls; (void)style; (void)x; (void)y; (void)p; (void)m; (void)i; (void)l;
     char t[256]; w2u(title, t, sizeof t);
     SDL_GL_SetAttribute(SDL_GL_DOUBLEBUFFER, 1);
+#ifdef PS4_GLES
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_PROFILE_MASK, SDL_GL_CONTEXT_PROFILE_ES);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MAJOR_VERSION, 2);
+    SDL_GL_SetAttribute(SDL_GL_CONTEXT_MINOR_VERSION, 0);
+#endif
     Uint32 fl = SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI | SDL_WINDOW_HIDDEN | (no_gl ? 0 : SDL_WINDOW_OPENGL);
 #ifdef __ANDROID__
-    fl = SDL_WINDOW_FULLSCREEN | SDL_WINDOW_ALLOW_HIGHDPI;
+    fl = SDL_WINDOW_FULLSCREEN | SDL_WINDOW_ALLOW_HIGHDPI | (no_gl ? 0 : SDL_WINDOW_OPENGL);
 #endif
+    { const char *e = getenv("PS4_WINDOW"); int a, b; if (e && sscanf(e, "%dx%d", &a, &b) == 2) { w = a; h = b; } }   /* tests */
     win = SDL_CreateWindow(t, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, w, h, fl);
     if (win && no_gl) renderer();
     return win;
@@ -616,8 +643,10 @@ LRESULT DefWindowProcW(HWND h, UINT m, WPARAM w, LPARAM l) { (void)h; (void)m; (
 BOOL GetClientRect(HWND h, RECT *r)
 {
     int w = 0, hh = 0;
-    if (h && ren) SDL_GetRendererOutputSize(ren, &w, &hh);
-    else if (h) SDL_GL_GetDrawableSize(h, &w, &hh);
+    if (h) {
+        int H; layout(&w, &H, &hh);
+        if (gles_active) gles_set_offset(0, H - hh);   /* GL counts from the bottom: the picture stays on top */
+    }
     r->left = r->top = 0; r->right = w; r->bottom = hh;
     return 1;
 }
@@ -739,7 +768,8 @@ static void post(UINT m, WPARAM w, LPARAM l)
     if (npending < 64) { MSG *x = &pending[npending++]; memset(x, 0, sizeof *x); x->hwnd = win; x->message = m; x->wParam = w; x->lParam = l; }
 }
 static int quit_posted;
-static void drawable(int *w, int *h) { if (ren) SDL_GetRendererOutputSize(ren, w, h); else SDL_GL_GetDrawableSize(win, w, h); }
+static void drawable_full(int *w, int *h) { if (ren) SDL_GetRendererOutputSize(ren, w, h); else SDL_GL_GetDrawableSize(win, w, h); }
+#define drawable drawable_full
 static int touch_event(const SDL_Event *e);
 /* PS4_KEYS="ms:vk,ms:vk,..." (vk in hex): scripted key presses, for tests */
 static void scripted_keys(void)
@@ -789,6 +819,8 @@ static void pump(void)
             else if (e.button.button == SDL_BUTTON_RIGHT) post(WM_RBUTTONDOWN, 0, l);
             break; }
         case SDL_MOUSEWHEEL: post(WM_MOUSEWHEEL, (WPARAM)(((e.wheel.y * 120) & 0xFFFF) << 16), 0); break;
+        case SDL_APP_WILLENTERBACKGROUND: post(0x8001, 0, 0); return;   /* WM_APP_SUSPEND: save now, the system may end us */
+        case SDL_APP_DIDENTERFOREGROUND: post(0x8002, 0, 0); break;     /* WM_APP_RESUME */
         case SDL_FINGERDOWN: case SDL_FINGERUP: case SDL_FINGERMOTION: touch_event(&e); break;
         case SDL_CONTROLLERDEVICEADDED: case SDL_CONTROLLERDEVICEREMOVED: break;   /* polled in xinput_get_state */
         }
@@ -810,10 +842,13 @@ void PostQuitMessage(int c) { (void)c; quit_posted = 1; }
 
 
 /* ---------------------------------------------------------------- touch controls */
-/* On phones: a Mega Drive pad drawn over the picture (d-pad, A B C, Start,
- * the menu and turbo). Buttons act as an XInput pad, so they follow the pad
- * bindings; touches elsewhere are mouse clicks for the menus. Hidden while a
- * real controller is connected. */
+/* On phones and tablets: a Mega Drive pad (d-pad, A B C, Start, the menu and
+ * turbo), sized in millimetres from the screen's density. When the screen is
+ * much squarer than the picture (a Fold opened, a tablet held upright-ish) the
+ * picture moves to the top and the pad gets the free panel under it;
+ * otherwise it is drawn over the picture, half transparent. Buttons act as an
+ * XInput pad, so they follow the pad bindings; touches elsewhere are mouse
+ * clicks for the menus. Hidden while a real controller is connected. */
 #ifdef __ANDROID__
 static int touch_on = 1;
 #else
@@ -824,24 +859,79 @@ typedef struct { float x, y, r; const char *label; } tbtn_t;
 static tbtn_t tb[TB_N];
 static SDL_FingerID tf_id[10]; static int tf_btn[10], tf_used[10];
 static WORD touch_buttons; static int turbo_held;
-static SDL_Texture *t_label[TB_N];
+static int panel_h;                  /* height of the panel under the picture (0: drawn over it) */
+static SDL_Texture *t_label[TB_N]; static unsigned g_label[TB_N]; static int label_w[TB_N], label_h[TB_N], label_px[TB_N];
 static int touch_enabled(void)
 {
     if (touch_on < 0) { const char *e = getenv("PS4_TOUCH"); touch_on = e && *e == '1'; }
     if (!touch_on) return 0;
     for (int i = 0; i < 4; i++) if (pads[i] && SDL_GameControllerGetAttached(pads[i])) return 0;
-    return SDL_NumJoysticks() == 0 || !SDL_IsGameController(0);
+    for (int i = 0; i < SDL_NumJoysticks(); i++) if (SDL_IsGameController(i)) return 0;
+    return 1;
+}
+static float dpi(void)
+{
+    static float d;
+    if (!d) {
+        float dd = 0, hd = 0, vd = 0;
+        const char *e = getenv("PS4_DPI");
+        if (e && atof(e) > 30) d = (float)atof(e);
+        else if (SDL_GetDisplayDPI(0, &dd, &hd, &vd) == 0 && hd > 60) d = hd;
+#ifdef __ANDROID__
+        else { int w, h; drawable(&w, &h); d = (h < w ? h : w) / 2.6f; }   /* a phone is ~65 mm across */
+#else
+        else d = 96;
+#endif
+    }
+    return d;
+}
+static float mm(float v) { return v * dpi() / 25.4f; }
+/* the full drawable size, and the part the picture gets */
+static int can_panel(void);
+static void layout(int *W, int *H, int *gh)
+{
+    int w, h; drawable_full(&w, &h);
+    *W = w; *H = h;
+    panel_h = 0;
+    if (touch_enabled() && can_panel()) {
+        int pic = (int)(w * 9.0f / 16.0f + 0.5f);         /* a 16:9 picture across the width */
+        int free = h - pic;
+        if (free >= mm(22) && free >= h / 7) panel_h = free;
+    }
+    *gh = h - panel_h;
 }
 static void touch_layout(int W, int H)
 {
-    float u = H / 10.0f;
-    tb[TB_DPAD]  = (tbtn_t){ 2.9f * u, H - 3.0f * u, 2.3f * u, "" };
-    tb[TB_A]     = (tbtn_t){ W - 6.0f * u, H - 1.9f * u, 0.95f * u, "A" };
-    tb[TB_B]     = (tbtn_t){ W - 3.9f * u, H - 2.6f * u, 0.95f * u, "B" };
-    tb[TB_C]     = (tbtn_t){ W - 1.8f * u, H - 3.3f * u, 0.95f * u, "C" };
-    tb[TB_START] = (tbtn_t){ W / 2.0f + 1.7f * u, H - 0.7f * u, 0.6f * u, "Start" };
-    tb[TB_MENU]  = (tbtn_t){ W / 2.0f - 1.7f * u, H - 0.7f * u, 0.6f * u, "Меню" };
-    tb[TB_TURBO] = (tbtn_t){ W - 1.4f * u, 1.0f * u + H * 0.22f, 0.6f * u, "»" };
+    float m = mm(3.5f);
+    float rb = mm(6.0f), rd = mm(13.0f), rs = mm(4.2f);
+    if (panel_h) {
+        float top = (float)(H - panel_h), cy = top + panel_h / 2.0f;
+        if (rd > panel_h * 0.42f) rd = panel_h * 0.42f;
+        if (rb > panel_h * 0.19f) rb = panel_h * 0.19f;
+        if (rs > panel_h * 0.13f) rs = panel_h * 0.13f;
+        float s = rb * 2.35f;
+        tb[TB_DPAD]  = (tbtn_t){ m * 2 + rd, cy, rd, "" };
+        tb[TB_C]     = (tbtn_t){ W - m * 2 - rb, cy - s * 0.35f, rb, "C" };
+        tb[TB_B]     = (tbtn_t){ tb[TB_C].x - s, cy, rb, "B" };
+        tb[TB_A]     = (tbtn_t){ tb[TB_B].x - s, cy + s * 0.35f, rb, "A" };
+        float mid = W / 2.0f, gap = rs * 3.0f;
+        tb[TB_MENU]  = (tbtn_t){ mid - gap, cy + rs * 1.2f, rs, "Меню" };
+        tb[TB_START] = (tbtn_t){ mid, cy + rs * 1.2f, rs, "Start" };
+        tb[TB_TURBO] = (tbtn_t){ mid + gap, cy + rs * 1.2f, rs, "»" };
+    } else {
+        float lim = (H < W ? H : W);
+        if (rd > lim * 0.2f) rd = lim * 0.2f;
+        if (rb > lim * 0.085f) rb = lim * 0.085f;
+        if (rs > lim * 0.06f) rs = lim * 0.06f;
+        float s = rb * 2.35f;
+        tb[TB_DPAD]  = (tbtn_t){ m + rd, H - m - rd, rd, "" };
+        tb[TB_C]     = (tbtn_t){ W - m - rb, H - m - rb - s * 0.75f, rb, "C" };
+        tb[TB_B]     = (tbtn_t){ tb[TB_C].x - s, tb[TB_C].y + s * 0.35f, rb, "B" };
+        tb[TB_A]     = (tbtn_t){ tb[TB_B].x - s, tb[TB_B].y + s * 0.35f, rb, "A" };
+        tb[TB_MENU]  = (tbtn_t){ W / 2.0f - rs * 1.7f, H - m - rs, rs, "Меню" };
+        tb[TB_START] = (tbtn_t){ W / 2.0f + rs * 1.7f, H - m - rs, rs, "Start" };
+        tb[TB_TURBO] = (tbtn_t){ W - m - rs, tb[TB_C].y - rb - mm(9), rs, "»" };
+    }
 }
 /* d-pad bits from a point (8 directions, a dead zone in the middle) */
 static WORD dpad_bits(float dx, float dy, float r)
@@ -858,12 +948,13 @@ static WORD dpad_bits(float dx, float dy, float r)
 }
 static int hit(float x, float y)
 {
+    int best = -1; float bd = 1e30f;
     for (int i = 0; i < TB_N; i++) {
-        float dx = x - tb[i].x, dy = y - tb[i].y, r = tb[i].r * (i == TB_DPAD ? 1.0f : 1.25f);
-        if (i == TB_START || i == TB_MENU || i == TB_TURBO) r = tb[i].r * 1.6f;
-        if (dx * dx + dy * dy <= r * r) return i;
+        float dx = x - tb[i].x, dy = y - tb[i].y, r = tb[i].r * (i == TB_DPAD ? 1.15f : i <= TB_C ? 1.3f : 1.6f);
+        float d = dx * dx + dy * dy;
+        if (d <= r * r && d / (r * r) < bd) { bd = d / (r * r); best = i; }
     }
-    return -1;
+    return best;
 }
 static void touch_recompute(float *fx, float *fy)
 {
@@ -887,7 +978,7 @@ static int touch_event(const SDL_Event *e)
 {
     if (!touch_enabled()) return 0;
     static float fx[10], fy[10];
-    int W, H; drawable(&W, &H);
+    int W, H, gh; layout(&W, &H, &gh);
     touch_layout(W, H);
     float x = e->tfinger.x * W, y = e->tfinger.y * H;
     int k = -1;
@@ -896,95 +987,149 @@ static int touch_event(const SDL_Event *e)
         if (k < 0) for (int i = 0; i < 10 && k < 0; i++) if (!tf_used[i]) k = i;
         if (k < 0) return 1;
         tf_used[k] = 1; tf_id[k] = e->tfinger.fingerId; tf_btn[k] = hit(x, y);
-        if (tf_btn[k] < 0) {   /* not a button: a click for the menus */
+        if (tf_btn[k] < 0 && y < gh) {   /* not a button: a click for the menus */
             LPARAM l = (LPARAM)(((int)x & 0xFFFF) | (((int)y & 0xFFFF) << 16));
             post(WM_MOUSEMOVE, 0, l); post(WM_LBUTTONDOWN, 0, l);
         }
     } else if (k < 0) return 1;
     else if (e->type == SDL_FINGERUP) tf_used[k] = 0;
-    else if (tf_btn[k] > TB_DPAD || tf_btn[k] < 0) {   /* sliding between A, B and C */
+    else if (tf_btn[k] >= TB_A && tf_btn[k] <= TB_C) {   /* sliding between A, B and C */
         int h2 = hit(x, y);
-        if (tf_btn[k] >= TB_A && tf_btn[k] <= TB_C && h2 >= TB_A && h2 <= TB_C) tf_btn[k] = h2;
+        if (h2 >= TB_A && h2 <= TB_C) tf_btn[k] = h2;
     }
     if (k >= 0) { fx[k] = x; fy[k] = y; }
     touch_recompute(fx, fy);
     return 1;
 }
+
+/* drawing, on the SDL renderer or on OpenGL ES (port/gles.c) */
+void gles_overlay_begin(int w, int h); void gles_overlay_end(void);
+void gles_tris(const float *xy, int n, int r, int g, int b, int a);
+unsigned gles_texture(const uint32_t *argb, int w, int h); void gles_texture_free(unsigned t);
+void gles_image(unsigned t, float x, float y, float w, float h, int alpha);
+static int draw_gl;
+static void tris(const float *xy, int n, SDL_Color c)
+{
+    if (draw_gl) { gles_tris(xy, n, c.r, c.g, c.b, c.a); return; }
+    SDL_Vertex v[256];
+    for (int i = 0; i < n && i < 256; i++) v[i] = (SDL_Vertex){ { xy[i * 2], xy[i * 2 + 1] }, c, { 0, 0 } };
+    SDL_RenderGeometry(ren, 0, v, n < 256 ? n : 256, 0, 0);
+}
 static void fill_circle(float cx, float cy, float r, SDL_Color c)
 {
-    SDL_Vertex v[3 * 40];
-    for (int i = 0; i < 40; i++) {
-        float a0 = i * 6.2831853f / 40, a1 = (i + 1) * 6.2831853f / 40;
-        v[i * 3 + 0] = (SDL_Vertex){ { cx, cy }, c, { 0, 0 } };
-        v[i * 3 + 1] = (SDL_Vertex){ { cx + r * SDL_cosf(a0), cy + r * SDL_sinf(a0) }, c, { 0, 0 } };
-        v[i * 3 + 2] = (SDL_Vertex){ { cx + r * SDL_cosf(a1), cy + r * SDL_sinf(a1) }, c, { 0, 0 } };
+    float xy[48 * 6]; int n = 0;
+    for (int i = 0; i < 48; i++) {
+        float a0 = i * 6.2831853f / 48, a1 = (i + 1) * 6.2831853f / 48;
+        xy[n++] = cx; xy[n++] = cy;
+        xy[n++] = cx + r * SDL_cosf(a0); xy[n++] = cy + r * SDL_sinf(a0);
+        xy[n++] = cx + r * SDL_cosf(a1); xy[n++] = cy + r * SDL_sinf(a1);
     }
-    SDL_RenderGeometry(ren, 0, v, 120, 0, 0);
+    tris(xy, n / 2, c);
 }
-static SDL_Texture *label_tex(int i, int px)
+static void fill_rect(float x, float y, float w, float h, SDL_Color c)
 {
-    if (t_label[i]) return t_label[i];
-    fonts_init();
-    fontobj_t *f = CreateFontW(px, 0, 0, 0, 700, 0, 0, 0, 0, 0, 0, 0, 0, 0);
-    wchar_t w[16]; u2w(tb[i].label, -1, w, 16);
-    dc_t dc = { OBJ_DC, 0, f, 0xFFFFFF, 0 };
-    SIZE sz; GetTextExtentPoint32W(&dc, w, (int)wcslen(w), &sz);
-    bitmap_t bm = { OBJ_BITMAP, (int)sz.cx + 2, (int)sz.cy + 2, calloc((size_t)(sz.cx + 2) * (sz.cy + 2), 4) };
-    dc.bm = &bm;
-    TextOutW(&dc, 1, 1, w, (int)wcslen(w));
-    for (int k = 0; k < bm.w * bm.h; k++) { uint32_t g = bm.px[k] & 255; bm.px[k] = g << 24 | 0xFFFFFF; }   /* white, coverage as alpha */
-    t_label[i] = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, bm.w, bm.h);
-    SDL_UpdateTexture(t_label[i], 0, bm.px, bm.w * 4);
-    SDL_SetTextureBlendMode(t_label[i], SDL_BLENDMODE_BLEND);
-    free(bm.px);
-    return t_label[i];
+    float xy[12] = { x, y, x + w, y, x + w, y + h, x, y, x + w, y + h, x, y + h };
+    tris(xy, 6, c);
 }
-static void touch_draw(void)
+static void label(int i, int px, float cx, float cy, int alpha)
 {
-    if (!touch_enabled() || !ren) return;
-    int W, H; SDL_GetRendererOutputSize(ren, &W, &H);
+    if (label_px[i] != px) {   /* (re)make it at this size */
+        if (t_label[i]) { SDL_DestroyTexture(t_label[i]); t_label[i] = 0; }
+        if (g_label[i]) { gles_texture_free(g_label[i]); g_label[i] = 0; }
+        label_px[i] = px;
+    }
+    if (draw_gl ? !g_label[i] : !t_label[i]) {
+        fonts_init();
+        fontobj_t *f = CreateFontW(px, 0, 0, 0, 700, 0, 0, 0, 0, 0, 0, 0, 0, 0);
+        wchar_t w[16]; u2w(tb[i].label, -1, w, 16);
+        dc_t dc = { OBJ_DC, 0, f, 0xFFFFFF, 0 };
+        SIZE sz; GetTextExtentPoint32W(&dc, w, (int)wcslen(w), &sz);
+        bitmap_t bm = { OBJ_BITMAP, (int)sz.cx + 2, (int)sz.cy + 2, calloc((size_t)(sz.cx + 2) * (sz.cy + 2), 4) };
+        dc.bm = &bm;
+        TextOutW(&dc, 1, 1, w, (int)wcslen(w));
+        for (int k = 0; k < bm.w * bm.h; k++) { uint32_t g = bm.px[k] & 255; bm.px[k] = g << 24 | 0xFFFFFF; }   /* white, coverage as alpha */
+        if (draw_gl) g_label[i] = gles_texture(bm.px, bm.w, bm.h);
+        else {
+            t_label[i] = SDL_CreateTexture(ren, SDL_PIXELFORMAT_ARGB8888, SDL_TEXTUREACCESS_STATIC, bm.w, bm.h);
+            SDL_UpdateTexture(t_label[i], 0, bm.px, bm.w * 4);
+            SDL_SetTextureBlendMode(t_label[i], SDL_BLENDMODE_BLEND);
+        }
+        label_w[i] = bm.w; label_h[i] = bm.h;
+        free(bm.px);
+    }
+    SDL_FRect r = { cx - label_w[i] / 2.0f, cy - label_h[i] / 2.0f, (float)label_w[i], (float)label_h[i] };
+    if (draw_gl) gles_image(g_label[i], r.x, r.y, r.w, r.h, alpha);
+    else { SDL_SetTextureAlphaMod(t_label[i], (Uint8)alpha); SDL_RenderCopyF(ren, t_label[i], 0, &r); }
+}
+static void touch_draw_common(int W, int H)
+{
     touch_layout(W, H);
-    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
-    SDL_Color base = { 255, 255, 255, 46 }, lit = { 255, 230, 140, 110 }, dark = { 0, 0, 0, 60 };
-    /* d-pad: a disc with a cross, the pressed arms lit */
+    int a = panel_h ? 2 : 1;   /* in the panel nothing is covered: stronger */
+    SDL_Color base = { 255, 255, 255, (Uint8)(40 * a) }, lit = { 255, 220, 120, (Uint8)(95 * a) }, dark = { 0, 0, 0, (Uint8)(panel_h ? 0 : 50) };
+    SDL_Color ring = { 255, 255, 255, (Uint8)(panel_h ? 30 : 0) };
     tbtn_t *d = &tb[TB_DPAD];
-    fill_circle(d->x, d->y, d->r, dark);
-    float a = d->r * 0.32f, l = d->r * 0.9f;
-    SDL_FRect arms[4] = { { d->x - a, d->y - l, 2 * a, l - a }, { d->x - a, d->y + a, 2 * a, l - a },
-                          { d->x - l, d->y - a, l - a, 2 * a }, { d->x + a, d->y - a, l - a, 2 * a } };
+    if (ring.a) fill_circle(d->x, d->y, d->r, ring);
+    if (dark.a) fill_circle(d->x, d->y, d->r, dark);
+    float q = d->r * 0.3f, l = d->r * 0.88f;
+    float arms[4][4] = { { d->x - q, d->y - l, 2 * q, l - q }, { d->x - q, d->y + q, 2 * q, l - q },
+                         { d->x - l, d->y - q, l - q, 2 * q }, { d->x + q, d->y - q, l - q, 2 * q } };
     WORD bits[4] = { XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_DPAD_DOWN, XINPUT_GAMEPAD_DPAD_LEFT, XINPUT_GAMEPAD_DPAD_RIGHT };
-    for (int i = 0; i < 4; i++) {
-        SDL_Color c = (touch_buttons & bits[i]) ? lit : base;
-        SDL_SetRenderDrawColor(ren, c.r, c.g, c.b, c.a);
-        SDL_RenderFillRectF(ren, &arms[i]);
-    }
-    SDL_SetRenderDrawColor(ren, base.r, base.g, base.b, base.a);
-    SDL_FRect mid = { d->x - a, d->y - a, 2 * a, 2 * a }; SDL_RenderFillRectF(ren, &mid);
+    for (int i = 0; i < 4; i++) fill_rect(arms[i][0], arms[i][1], arms[i][2], arms[i][3], (touch_buttons & bits[i]) ? lit : base);
+    fill_rect(d->x - q, d->y - q, 2 * q, 2 * q, base);
     WORD bb[TB_N] = { 0, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_START, XINPUT_GAMEPAD_BACK, 0 };
     for (int i = TB_A; i < TB_N; i++) {
         int on = i == TB_TURBO ? turbo_held : (touch_buttons & bb[i]) != 0;
         fill_circle(tb[i].x, tb[i].y, tb[i].r, on ? lit : base);
-        SDL_Texture *t = label_tex(i, (int)(tb[i].r * (i <= TB_C ? 0.85f : 0.55f)));
-        int tw, th; SDL_QueryTexture(t, 0, 0, &tw, &th);
-        SDL_SetTextureAlphaMod(t, 170);
-        SDL_FRect r = { tb[i].x - tw / 2.0f, tb[i].y - th / 2.0f, (float)tw, (float)th };
-        SDL_RenderCopyF(ren, t, 0, &r);
+        int px = (int)(tb[i].r * (i <= TB_C ? 1.0f : i == TB_TURBO ? 1.1f : 0.62f));
+        label(i, px < 8 ? 8 : px, tb[i].x, tb[i].y, panel_h ? 230 : 160);
     }
+}
+static void touch_draw(void)        /* SDL renderer */
+{
+    if (!touch_enabled() || !ren) return;
+    int W, H, gh; layout(&W, &H, &gh);
+    SDL_RenderSetViewport(ren, 0);
+    SDL_SetRenderDrawBlendMode(ren, SDL_BLENDMODE_BLEND);
+    draw_gl = 0;
+    touch_draw_common(W, H);
+}
+static void touch_draw_gl(void)     /* OpenGL ES, before the buffers swap */
+{
+    if (!touch_enabled()) return;
+    int W, H, gh; layout(&W, &H, &gh);
+    gles_overlay_begin(W, H);
+    draw_gl = 1;
+    touch_draw_common(W, H);
+    gles_overlay_end();
 }
 
 /* ---------------------------------------------------------------- WGL */
 int ChoosePixelFormat(HDC d, const PIXELFORMATDESCRIPTOR *p) { (void)d; (void)p; return 1; }
 BOOL SetPixelFormat(HDC d, int f, const PIXELFORMATDESCRIPTOR *p) { (void)d; (void)f; (void)p; return 1; }
-HGLRC wglCreateContext(HDC d) { (void)d; if (no_gl) return 0; glc = SDL_GL_CreateContext(win); return glc; }
+HGLRC wglCreateContext(HDC d)
+{
+    (void)d;
+    if (no_gl) return 0;
+    glc = SDL_GL_CreateContext(win);
+#ifdef PS4_GLES
+    if (glc && (SDL_GL_MakeCurrent(win, glc) != 0 || !gles_init())) { SDL_GL_DeleteContext(glc); glc = 0; }
+    gles_active = glc != 0;
+#endif
+    return glc;
+}
 BOOL wglMakeCurrent(HDC d, HGLRC c) { (void)d; return SDL_GL_MakeCurrent(win, c) == 0; }
 BOOL wglDeleteContext(HGLRC c) { SDL_GL_DeleteContext(c); return 1; }
 static BOOL swap_interval(int i) { return SDL_GL_SetSwapInterval(i) == 0; }
 void *wglGetProcAddress(const char *n)
 {
     if (!strcmp(n, "wglSwapIntervalEXT")) return (void *)swap_interval;
+#ifdef PS4_GLES
+    return gles_proc(n);
+#else
     return SDL_GL_GetProcAddress(n);
+#endif
 }
-BOOL SwapBuffers(HDC d) { (void)d; SDL_GL_SwapWindow(win); return 1; }
+BOOL SwapBuffers(HDC d) { (void)d; if (gles_active) touch_draw_gl(); SDL_GL_SwapWindow(win); return 1; }
 
 /* ---------------------------------------------------------------- shell */
 static int run_cmd(const char *cmd, char *out, int n)
@@ -1097,30 +1242,42 @@ int d3d_present(int vsync) { (void)vsync; return 0; }
 
 #ifdef PS4_NO_GL
 #include "../win/glfx.h"
-void glViewport(GLint a, GLint b, GLsizei c, GLsizei d) { (void)a; (void)b; (void)c; (void)d; }
-void glClearColor(GLclampf a, GLclampf b, GLclampf c, GLclampf d) { (void)a; (void)b; (void)c; (void)d; }
-void glClear(GLbitfield a) { (void)a; }
-void glGenTextures(GLsizei n, GLuint *t) { for (int i = 0; i < n; i++) t[i] = 0; }
-void glBindTexture(GLenum a, GLuint b) { (void)a; (void)b; }
-void glTexParameteri(GLenum a, GLenum b, GLint c) { (void)a; (void)b; (void)c; }
-void glTexImage2D(GLenum a, GLint b, GLint c, GLsizei d, GLsizei e, GLint f, GLenum g, GLenum h, const void *i) { (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h; (void)i; }
-void glTexSubImage2D(GLenum a, GLint b, GLint c, GLint d, GLsizei e, GLsizei f, GLenum g, GLenum h, const void *i) { (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h; (void)i; }
-void glEnable(GLenum a) { (void)a; }
-void glDisable(GLenum a) { (void)a; }
-void glBlendFunc(GLenum a, GLenum b) { (void)a; (void)b; }
-void glBegin(GLenum a) { (void)a; }
-void glEnd(void) {}
-void glTexCoord2f(GLfloat a, GLfloat b) { (void)a; (void)b; }
-void glVertex2f(GLfloat a, GLfloat b) { (void)a; (void)b; }
-void glColor4f(GLfloat a, GLfloat b, GLfloat c, GLfloat d) { (void)a; (void)b; (void)c; (void)d; }
-void glMatrixMode(GLenum a) { (void)a; }
-void glLoadIdentity(void) {}
-void glOrtho(GLdouble a, GLdouble b, GLdouble c, GLdouble d, GLdouble e, GLdouble f) { (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; }
-void glPixelStorei(GLenum a, GLint b) { (void)a; (void)b; }
-const unsigned char *glGetString(GLenum a) { (void)a; return 0; }
-GLenum glGetError(void) { return 1; }
+void port_glViewport(GLint a, GLint b, GLsizei c, GLsizei d) { (void)a; (void)b; (void)c; (void)d; }
+void port_glClearColor(GLclampf a, GLclampf b, GLclampf c, GLclampf d) { (void)a; (void)b; (void)c; (void)d; }
+void port_glClear(GLbitfield a) { (void)a; }
+void port_glGenTextures(GLsizei n, GLuint *t) { for (int i = 0; i < n; i++) t[i] = 0; }
+void port_glBindTexture(GLenum a, GLuint b) { (void)a; (void)b; }
+void port_glTexParameteri(GLenum a, GLenum b, GLint c) { (void)a; (void)b; (void)c; }
+void port_glTexImage2D(GLenum a, GLint b, GLint c, GLsizei d, GLsizei e, GLint f, GLenum g, GLenum h, const void *i) { (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h; (void)i; }
+void port_glTexSubImage2D(GLenum a, GLint b, GLint c, GLint d, GLsizei e, GLsizei f, GLenum g, GLenum h, const void *i) { (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; (void)g; (void)h; (void)i; }
+void port_glEnable(GLenum a) { (void)a; }
+void port_glDisable(GLenum a) { (void)a; }
+void port_glBlendFunc(GLenum a, GLenum b) { (void)a; (void)b; }
+void port_glBegin(GLenum a) { (void)a; }
+void port_glEnd(void) {}
+void port_glTexCoord2f(GLfloat a, GLfloat b) { (void)a; (void)b; }
+void port_glVertex2f(GLfloat a, GLfloat b) { (void)a; (void)b; }
+void port_glColor4f(GLfloat a, GLfloat b, GLfloat c, GLfloat d) { (void)a; (void)b; (void)c; (void)d; }
+void port_glMatrixMode(GLenum a) { (void)a; }
+void port_glLoadIdentity(void) {}
+void port_glOrtho(GLdouble a, GLdouble b, GLdouble c, GLdouble d, GLdouble e, GLdouble f) { (void)a; (void)b; (void)c; (void)d; (void)e; (void)f; }
+void port_glPixelStorei(GLenum a, GLint b) { (void)a; (void)b; }
+const unsigned char *port_glGetString(GLenum a) { (void)a; return 0; }
+GLenum port_glGetError(void) { return 1; }
 int glfx_init(glfx_getproc_t g) { (void)g; return 0; }
 const char *glfx_error(void) { return "no OpenGL"; }
 void glfx_draw(const uint32_t *fb, int W, int H, int pitch, int x, int y, int w, int h, int cw, int ch, int mode, int bilinear, int dither, int backdrop)
 { (void)fb; (void)W; (void)H; (void)pitch; (void)x; (void)y; (void)w; (void)h; (void)cw; (void)ch; (void)mode; (void)bilinear; (void)dither; (void)backdrop; }
+#endif
+
+#ifndef PS4_GLES   /* the touch controls' OpenGL ES drawing is only used with PS4_GLES */
+void gles_set_offset(int x, int y) { (void)x; (void)y; }
+int gles_init(void) { return 0; }
+void *gles_proc(const char *n) { return SDL_GL_GetProcAddress(n); }
+void gles_overlay_begin(int w, int h) { (void)w; (void)h; }
+void gles_overlay_end(void) {}
+void gles_tris(const float *xy, int n, int r, int g, int b, int a) { (void)xy; (void)n; (void)r; (void)g; (void)b; (void)a; }
+unsigned gles_texture(const uint32_t *p, int w, int h) { (void)p; (void)w; (void)h; return 0; }
+void gles_texture_free(unsigned t) { (void)t; }
+void gles_image(unsigned t, float x, float y, float w, float h, int a) { (void)t; (void)x; (void)y; (void)w; (void)h; (void)a; }
 #endif

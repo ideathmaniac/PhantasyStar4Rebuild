@@ -10,32 +10,7 @@
 #include <string.h>
 #include <stdlib.h>
 
-/* without desktop OpenGL (Android): the front end's GL path is never taken
- * (wglCreateContext fails), its calls go to empty stand-ins */
-#ifdef PS4_NO_GL
-#define glViewport port_glViewport
-#define glClearColor port_glClearColor
-#define glClear port_glClear
-#define glGenTextures port_glGenTextures
-#define glBindTexture port_glBindTexture
-#define glTexParameteri port_glTexParameteri
-#define glTexImage2D port_glTexImage2D
-#define glTexSubImage2D port_glTexSubImage2D
-#define glEnable port_glEnable
-#define glDisable port_glDisable
-#define glBlendFunc port_glBlendFunc
-#define glBegin port_glBegin
-#define glEnd port_glEnd
-#define glTexCoord2f port_glTexCoord2f
-#define glVertex2f port_glVertex2f
-#define glColor4f port_glColor4f
-#define glMatrixMode port_glMatrixMode
-#define glLoadIdentity port_glLoadIdentity
-#define glOrtho port_glOrtho
-#define glPixelStorei port_glPixelStorei
-#define glGetString port_glGetString
-#define glGetError port_glGetError
-#endif
+#include "port_gl.h"
 #include "../../win/include/win32.h"
 
 #define _snwprintf swprintf

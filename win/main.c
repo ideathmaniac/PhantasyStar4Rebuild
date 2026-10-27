@@ -1562,13 +1562,22 @@ static void build_menu(void)
         add(L"Масштаб", scn[C.scale_mode]);
         add(L"Размытие при масштабировании", onoff(C.smooth));
         add(L"Смешивать дизеринг (как на ТВ)", fx_ok ? onoff(C.fx_dither) : L"нужен OpenGL 2.0");
+#ifdef __ANDROID__
+        add(L"Полный экран", L"всегда");
+#else
         add(L"Полный экран", onoff(fullscreen));
+#endif
         add(L"Вертикальная синхронизация", onoff(C.vsync));
         {
+#ifdef _WIN32
             static const wchar_t *rn[3] = { L"Direct3D 11", L"OpenGL", L"GDI (без фильтров)" };
-            int active = d3d_ok ? 0 : gl_ok ? 1 : 2;
+            int active = d3d_ok ? 0 : gl_ok ? 1 : 2, same = C.renderer == active;
+#else       /* no Direct3D here: OpenGL (ES on phones) or the plain output */
+            static const wchar_t *rn[3] = { L"OpenGL", L"OpenGL", L"простой (без фильтров)" };
+            int active = gl_ok ? 1 : 2, same = (C.renderer == 2) == (active == 2);
+#endif
             static wchar_t rv[80];
-            if (C.renderer == active) wcscpy(rv, rn[active]);
+            if (same) wcscpy(rv, rn[active]);
             else _snwprintf(rv, 79, L"%ls (после перезапуска)", rn[C.renderer]);
             add(L"Вывод изображения", rv);
         }
@@ -1977,7 +1986,11 @@ static void draw_launcher(int cw, int ch)
     } else if (l_page == 1 && slot >= 0) {
         l_text(cx + pad, cy + pad, L"Этот слот пуст", RGBC(150, 160, 200), l_font_card);
     }
+#ifdef __ANDROID__
+    l_text(lx + (int)(8 * u), logo_bottom, L"НАТИВНАЯ ВЕРСИЯ ДЛЯ ANDROID · " APP_VERSION_W, RGBC(159, 176, 255), l_font_small);
+#else
     l_text(lx + (int)(8 * u), logo_bottom, L"НАТИВНАЯ ВЕРСИЯ ДЛЯ ПК · " APP_VERSION_W, RGBC(159, 176, 255), l_font_small);
+#endif
     y = my;
     for (int i = 0; i < n; i++) {
         int hgt = (l_page == 0 && subs[i][0]) ? ih + sub : ih;
@@ -2159,9 +2172,19 @@ static void menu_act(int dir)
         case 2: C.scale_mode = (C.scale_mode + 3 + d) % 3; break;
         case 3: C.smooth = !C.smooth; break;
         case 4: C.fx_dither = !C.fx_dither; break;
-        case 5: toggle_fullscreen(); break;
+        case 5:
+#ifndef __ANDROID__
+            toggle_fullscreen();
+#endif
+            break;
         case 6: C.vsync = !C.vsync; break;
-        case 7: C.renderer = (C.renderer + 3 + d) % 3; C.use_gl = C.renderer != 2; set_status(L"вступит в силу после перезапуска"); break;
+        case 7:
+#ifdef _WIN32
+            C.renderer = (C.renderer + 3 + d) % 3;
+#else
+            C.renderer = C.renderer == 2 ? 0 : 2;
+#endif
+            C.use_gl = C.renderer != 2; set_status(L"вступит в силу после перезапуска"); break;
         case 8: C.ws_battle = !C.ws_battle; apply_video(); break;
         case 9: C.backdrop = !C.backdrop; break;
         case 10: C.cine = !C.cine; emu_set_cutscene_detect(C.cine); break;
@@ -2474,6 +2497,21 @@ static void sizemove_tick(void)
     for (int k = 0; k < 3 && pace_due(0); k++) game_frames(0);
 }
 
+/* the "running" marker (see Start) and the phone's background: Android ends
+ * a program in the background without warning, so everything a clean exit
+ * writes is written when the app goes there (port/sdl_win32.c posts these) */
+#define WM_APP_SUSPEND 0x8001
+#define WM_APP_RESUME 0x8002
+static wchar_t g_marker[700];
+static void app_suspend(void)
+{
+    sram_write();
+    if (C.autosave_min && !launcher_open) state_save(0, 1);
+    stats_save(); best_save(); fog_save(); world_save(); cfg_save();
+    DeleteFileW(g_marker);
+    logw("suspended: everything saved");
+}
+
 static LRESULT wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
 {
     int mx = (int)(short)(l & 0xFFFF), my = (int)(short)((l >> 16) & 0xFFFF);
@@ -2514,6 +2552,8 @@ static LRESULT wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_EXITSIZEMOVE: in_sizemove = 0; KillTimer(h, 1); return 0;
     case WM_TIMER: if (in_sizemove && h == hwnd) sizemove_tick(); return 0;
     case WM_CLOSE: quit = 1; return 0;
+    case WM_APP_SUSPEND: app_suspend(); return 0;
+    case WM_APP_RESUME: { FILE *mf = _wfopen(g_marker, L"w"); if (mf) fclose(mf); } return 0;
     case WM_DESTROY: PostQuitMessage(0); return 0;
     case WM_ERASEBKGND: return 1;
     case WM_PAINT: { PAINTSTRUCT ps; BeginPaint(h, &ps); EndPaint(h, &ps); if (h == hwnd) present(); return 0; }
@@ -2607,6 +2647,7 @@ static int run(void)
     wchar_t marker[700]; path_in_exe_dir(marker, L"running.flag");
     int crashed_before = GetFileAttributesW(marker) != 0xFFFFFFFF;
     { FILE *mf = _wfopen(marker, L"w"); if (mf) fclose(mf); }
+    wcscpy(g_marker, marker);
 
     HINSTANCE inst = GetModuleHandleW(0);
     WNDCLASSEXW wc; memset(&wc, 0, sizeof wc);

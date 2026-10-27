@@ -23,6 +23,7 @@
 #ifdef _WIN32
 #include "win32.h"
 #else
+#include "../port/include/port_gl.h"   /* OpenGL ES (port/gles.c) on phones */
 typedef unsigned int GLenum, GLuint, GLbitfield; typedef int GLint, GLsizei; typedef float GLfloat, GLclampf; typedef double GLdouble;
 void glViewport(GLint, GLint, GLsizei, GLsizei);
 void glGenTextures(GLsizei, GLuint *);
@@ -92,6 +93,7 @@ static void (*pGenFramebuffers)(GLsizei, GLuint *);
 static void (*pBindFramebuffer)(GLenum, GLuint);
 static void (*pFramebufferTexture2D)(GLenum, GLenum, GLenum, GLuint, GLint);
 static GLenum (*pCheckFramebufferStatus)(GLenum);
+static void (*pBindAttribLocation)(GLuint, GLuint, const GLchar *);
 
 static char err[600];
 const char *glfx_error(void) { return err; }
@@ -102,13 +104,24 @@ const char *glfx_error(void) { return err; }
 /* ---------------------------------------------------------------- shaders */
 #include "fx_shaders.h"
 
+#ifdef PS4_GLES
+/* OpenGL ES 2: no fixed-function inputs; port/gles.c feeds a_pos / a_tc
+ * (attributes 0 and 1) and the projection u_mvp for each quad */
+static const char *VS =
+    "attribute vec4 a_pos;\nattribute vec2 a_tc;\nuniform mat4 u_mvp;\n"
+    "varying vec2 uv;\n"
+    "void main() { gl_Position = u_mvp * a_pos; uv = a_tc; }\n";
+#define FS_VERSION "#version 100\n#ifdef GL_FRAGMENT_PRECISION_HIGH\nprecision highp float;\n#else\nprecision mediump float;\n#endif\n"
+#else
 static const char *VS =
     "varying vec2 uv;\n"
     "void main() { gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex; uv = gl_MultiTexCoord0.xy; }\n";
+#define FS_VERSION "#version 110\n"
+#endif
 
 /* GLSL spelling of the shared shader dialect (win/fx_shaders.h) */
 static const char *FS_HEAD =
-    "#version 110\n"
+    FS_VERSION
     "#define float2 vec2\n#define float3 vec3\n#define float4 vec4\n"
     "#define lerp mix\n#define frac fract\n#define fmod mod\n"
     "#define EQ3(a, b) ((a) == (b))\n"
@@ -128,7 +141,14 @@ static int ready;
 static GLuint compile(GLenum type, const char *s, const char *name)
 {
     GLuint sh = pCreateShader(type);
-    if (type == GL_FRAGMENT_SHADER) {
+    if (type == GL_VERTEX_SHADER) {
+#ifdef PS4_GLES
+        const char *parts[2] = { "#version 100\n", s };
+        pShaderSource(sh, 2, parts, 0);
+#else
+        pShaderSource(sh, 1, &s, 0);
+#endif
+    } else if (type == GL_FRAGMENT_SHADER) {
         const char *parts[3] = { FS_HEAD, s, FS_TAIL };
         pShaderSource(sh, 3, parts, 0);
     } else
@@ -149,6 +169,7 @@ static int link(prog_t *p, const char *fs, const char *name)
     if (!v || !f) return 0;
     p->prog = pCreateProgram();
     pAttachShader(p->prog, v); pAttachShader(p->prog, f);
+    if (pBindAttribLocation) { pBindAttribLocation(p->prog, 0, "a_pos"); pBindAttribLocation(p->prog, 1, "a_tc"); }
     pLinkProgram(p->prog);
     GLint ok = 0; pGetProgramiv(p->prog, GL_LINK_STATUS, &ok);
     if (!ok) {
@@ -202,6 +223,9 @@ int glfx_init(glfx_getproc_t gp)
     L(pUniform1i, "glUniform1i"); L(pUniform1f, "glUniform1f"); L(pUniform2f, "glUniform2f"); L(pActiveTexture, "glActiveTexture");
     L(pGenFramebuffers, "glGenFramebuffers"); L(pBindFramebuffer, "glBindFramebuffer");
     L(pFramebufferTexture2D, "glFramebufferTexture2D"); L(pCheckFramebufferStatus, "glCheckFramebufferStatus");
+#ifdef PS4_GLES
+    L(pBindAttribLocation, "glBindAttribLocation");
+#endif
 #undef L
     if (!link(&P_DITHER, SH_DITHER, "dither") || !link(&P_EDGE, SH_EDGE, "edge") || !link(&P_XBR, SH_XBR, "xbr") ||
         !link(&P_PIXELS, SH_PIXELS, "pixels") || !link(&P_CRT, SH_CRT, "crt") || !link(&P_BACK, SH_BACKDROP, "backdrop") || !link(&P_DOWN, SH_DOWN, "down") || !link(&P_CINE, SH_CINE, "cine"))
