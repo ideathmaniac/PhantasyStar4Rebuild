@@ -8,7 +8,7 @@ Drive), made by statically recompiling the game's 68000 code to C. Targets the R
 **No game data is included.** The recompiled C (`generated/`) is produced from your own ROM.
 
 ## Downloads
-Each [release](https://github.com/ideathmaniac/ps4recomp/releases) has:
+Each [release](https://github.com/ideathmaniac/PhantasyStar4Rebuild/releases) has:
 - `PS4_Recomp_Windows.zip` — Windows 10/11 (64-bit);
 - `PS4_Recomp_Linux.tar.gz` — Linux and Steam Deck (SDL2, glibc 2.35+);
 - `PS4_Recomp_Android.apk` — Android 5.0+, on-screen pad or any gamepad.
