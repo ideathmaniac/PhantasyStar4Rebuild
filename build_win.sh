@@ -11,7 +11,7 @@ for d in win/def/*.def; do
   llvm-dlltool -m i386:x86-64 -d $d -l $OUT/lib/$(basename $d .def).lib
 done
 CFLAGS="--target=x86_64-pc-windows-msvc -O2 -w -ffreestanding -nostdlibinc -Iwin/include -Isrc -mno-stack-arg-probe -fno-stack-protector $RECOMP"
-SRCS="src/png.c src/hdpack.c src/resample.c src/qol.c src/tips.c src/shop.c src/bestiary.c src/portraits.c src/nemesis.c src/m68k.c src/md.c src/vdp.c src/run.c src/z80.c src/ym2612.c src/psg.c src/sound.c src/ps4_ws.c src/hdscale.c src/rewind.c src/emu.c win/main.c win/diag.c win/glfx.c win/d3dfx.c win/ui_soft.c win/setjmp_x64.c $GEN"
+SRCS="src/png.c src/hdpack.c src/resample.c src/qol.c src/tips.c src/shop.c src/bestiary.c src/portraits.c src/music.c src/nemesis.c src/m68k.c src/md.c src/vdp.c src/run.c src/z80.c src/ym2612.c src/psg.c src/sound.c src/ps4_ws.c src/hdscale.c src/rewind.c src/emu.c win/main.c win/diag.c win/glfx.c win/d3dfx.c win/ui_soft.c win/setjmp_x64.c $GEN"
 JOBS=${JOBS:-2}
 # a changed header rebuilds everything (the per-file check below only looks at the .c)
 NEWEST_H=$(ls -t win/include/*.h src/*.h win/*.h | head -1)

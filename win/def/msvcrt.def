@@ -22,6 +22,7 @@ malloc
 calloc
 realloc
 free
+qsort
 getenv
 atoi
 atol
@@ -53,3 +54,4 @@ strchr
 _strdup
 abs
 exp
+ldexp

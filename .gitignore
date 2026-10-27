@@ -19,3 +19,5 @@ android/.gradle/
 android/app/build/
 android/app/.cxx/
 android/local.properties
+# Music files people put next to the program (their own)
+menu_music.*

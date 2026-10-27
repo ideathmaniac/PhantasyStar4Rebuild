@@ -20,13 +20,14 @@
 #include "d3dfx.h"
 #include "../src/hdpack.h"
 #include "../src/portraits.h"
+#include "../src/music.h"
 #include "../src/png.h"
 #include "ui_soft.h"
 #include "icons.h"
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.43"
+#define APP_VERSION_W L"v0.44"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -64,6 +65,7 @@ typedef struct {
     int32_t party_hud;                     /* added in 0.39: party portraits with HP / TP at the top left */
     int32_t fx_shadow, fx_glow, fx_look;   /* added in 0.41: shadows under sprites, glow (0 off, 1 soft, 2 strong); colours 0-3 */
     int32_t quickbar;                      /* added in 0.42: quick access buttons under the party panel */
+    int32_t show_fps;                      /* added in 0.44: frame rate and where the time goes */
 } cfg_t;
 #define CFG_MAGIC 0x32475043u
 #define CFG_VERSION 2
@@ -85,6 +87,7 @@ typedef struct {
 #define CFG_V17_SIZE (offsetof(cfg_t, party_hud))
 #define CFG_V18_SIZE (offsetof(cfg_t, fx_shadow))
 #define CFG_V19_SIZE (offsetof(cfg_t, quickbar))
+#define CFG_V20_SIZE (offsetof(cfg_t, show_fps))
 static cfg_t C;
 
 /* pad input codes */
@@ -201,7 +204,7 @@ static void cfg_load(void)
     wchar_t p[700]; path_in_exe_dir(p, L"ps4recomp.cfg");
     size_t n = 0; uint8_t *b = read_file(p, &n);
     if (!b) return;
-    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE || n == CFG_V13_SIZE || n == CFG_V14_SIZE || n == CFG_V15_SIZE || n == CFG_V16_SIZE || n == CFG_V17_SIZE || n == CFG_V18_SIZE || n == CFG_V19_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
+    if ((n == sizeof C || n == CFG_V2_SIZE || n == CFG_V3_SIZE || n == CFG_V4_SIZE || n == CFG_V5_SIZE || n == CFG_V6_SIZE || n == CFG_V7_SIZE || n == CFG_V8_SIZE || n == CFG_V9_SIZE || n == CFG_V10_SIZE || n == CFG_V11_SIZE || n == CFG_V12_SIZE || n == CFG_V13_SIZE || n == CFG_V14_SIZE || n == CFG_V15_SIZE || n == CFG_V16_SIZE || n == CFG_V17_SIZE || n == CFG_V18_SIZE || n == CFG_V19_SIZE || n == CFG_V20_SIZE) && ((cfg_t *)b)->magic == CFG_MAGIC && ((cfg_t *)b)->version == CFG_VERSION) {
         memcpy(&C, b, n);                      /* an older file keeps the new fields at their defaults */
         if (n < CFG_V4_SIZE && C.hd) C.fx_mode = FX_SMOOTH;
         if (n < CFG_V5_SIZE) C.renderer = C.use_gl ? 0 : 2;
@@ -217,7 +220,8 @@ static void cfg_load(void)
         if (n < CFG_V17_SIZE) { C.fog = 1; C.fast_walk = 1; }
         if (n < CFG_V18_SIZE) C.party_hud = 1;
         if (n < CFG_V19_SIZE) { C.fx_shadow = 1; C.fx_glow = 1; C.fx_look = 0; }
-        if (n < sizeof C) C.quickbar = 1;
+        if (n < CFG_V20_SIZE) C.quickbar = 1;
+        if (n < sizeof C) C.show_fps = 0;
     } else if (n >= 20 + 1200 && *(uint32_t *)b == 0x31475043u)   /* version 1 file: keep the ROM path */
         memcpy(C.rom, b + 20, 1200);
     if (C.fx_mode < 0 || C.fx_mode >= FX_COUNT) C.fx_mode = FX_PIXELS;
@@ -714,7 +718,30 @@ static void audio_push(const int16_t *in, int n)
     }
     pos -= n;
     prev[0] = in[(n - 1) * 2]; prev[1] = in[(n - 1) * 2 + 1];
+    if (music_playing()) {   /* the launcher's music fading out over the game */
+        static int16_t mus[2 * 4200];
+        music_mix(mus, m, 48000, 85);
+        for (int i = 0; i < m * 2; i++) { int v = buf[i] + mus[i]; buf[i] = (int16_t)(v > 32767 ? 32767 : v < -32768 ? -32768 : v); }
+    }
     audio_submit(buf, m);
+}
+/* the launcher's music: menu_music.ogg (or .wav) next to the program */
+static void music_open(void)
+{
+    static const wchar_t *names[2] = { L"menu_music.ogg", L"menu_music.wav" };
+    for (int i = 0; i < 2 && !music_loaded(); i++) {
+        wchar_t p[700]; path_in_exe_dir(p, names[i]);
+        size_t n = 0; uint8_t *d = read_file(p, &n);
+        if (d) { if (music_load(d, n)) logw("menu music: %ls", names[i]); free(d); }
+    }
+}
+/* while the game is not running (launcher), only the music goes out */
+static void music_feed(void)
+{
+    if (!audio_ok || !music_playing()) return;
+    int q = audio_queued();
+    static int16_t mus[2 * 1024];
+    while (q < A_TARGET * 2) { music_mix(mus, 1024, 48000, 85); audio_submit(mus, 1024); q += 1024; }
 }
 static void audio_close(void)
 {
@@ -1020,7 +1047,8 @@ static void draw_icon(int x0, int y0, int size, int id, int dim)
 static void draw_menu(void);
 static void draw_status(void);
 static int menu_rect[4], status_rect[4], tip_rect[4], ach_rect[4], hp_rect[4], mm_rect[4];   /* x, y, w, h of overlay boxes drawn this frame */
-static int party_rect[5][4], quick_rect[4], qtip_rect[4], quick_bottom;
+static int party_rect[5][4], quick_rect[4], qtip_rect[4], fps_rect[4], quick_bottom;
+static void draw_fps(void);
 static int g_mouse_x = -1, g_mouse_y = -1;
 static int party_col_right, party_col_bottom;   /* the party panel and quick bar of the last frame (0 when not shown) */
 /* boxes at the top left move right of the party panel when they would cover it */
@@ -1039,7 +1067,7 @@ static int overlay_rects(int **r)
     int n = 0;
     r[n++] = menu_rect; r[n++] = status_rect; r[n++] = tip_rect; r[n++] = ach_rect; r[n++] = hp_rect; r[n++] = mm_rect;
     for (int k = 0; k < 5; k++) r[n++] = party_rect[k];
-    r[n++] = quick_rect; r[n++] = qtip_rect;
+    r[n++] = quick_rect; r[n++] = qtip_rect; r[n++] = fps_rect;
     return n;
 }
 static void draw_party(int px, int py, int pw, int ph);
@@ -1148,7 +1176,7 @@ static void present(void)
     if (quick_rect[2]) { int r = quick_rect[0] + quick_rect[2] + font_h / 2, b = quick_rect[1] + quick_rect[3];
         if (r > party_col_right) party_col_right = r; if (b > party_col_bottom) party_col_bottom = b; }
     for (int k = 0; k < 5; k++) party_rect[k][2] = 0;
-    quick_rect[2] = 0; qtip_rect[2] = 0; quick_bottom = 0;
+    quick_rect[2] = 0; qtip_rect[2] = 0; quick_bottom = 0; fps_rect[2] = 0;
     if (launcher_open) draw_launcher(cw, ch);
     else if (world_open && !menu_open) draw_world(cw, ch);
     else if (!menu_open) {
@@ -1160,6 +1188,7 @@ static void present(void)
         if (C.quickbar) draw_quickbar(y);
     }
     if (!launcher_open) draw_ach_toast();
+    if (!launcher_open) draw_fps();
     if (menu_open || status_msg[0]) {
         int lr[4]; memcpy(lr, menu_rect, sizeof lr);
         if (menu_open) draw_menu();
@@ -1252,8 +1281,16 @@ static void present(void)
             gl_quad(tex_frame, 512, 256, 0, 0, W, H, x, y, w, h, C.smooth);
         }
         int *rects[16]; int nrects = overlay_rects(rects);
+        /* an overlay box is uploaded again only when it changed: the party
+         * panel and the quick bar are on screen all the time, and on phones
+         * every texture upload can stall the GPU */
+        static int last_box[16][4]; static uint32_t last_hash[16]; static int last_tw, last_th;
+        int tw = gl_npot ? cw : pot(cw), th = gl_npot ? ch : pot(ch);
+        int same_set = tw == last_tw && th == last_th;
+        for (int k = 0; k < nrects && same_set; k++) if (memcmp(last_box[k], rects[k], sizeof last_box[k])) same_set = 0;
         for (int k = 0; k < nrects; k++) {
             int *r = rects[k];
+            memcpy(last_box[k], r, sizeof last_box[k]);
             /* keep the copied box inside the back buffer */
             if (r[0] < 0) { r[2] += r[0]; r[0] = 0; }
             if (r[1] < 0) { r[3] += r[1]; r[1] = 0; }
@@ -1261,14 +1298,22 @@ static void present(void)
             if (r[1] + r[3] > back_h) r[3] = back_h - r[1];
             if (r[2] <= 0 || r[3] <= 0 || cw > back_w || ch > back_h) continue;
             GdiFlush();
-            int tw = gl_npot ? cw : pot(cw), th = gl_npot ? ch : pot(ch);
-            if (!tex_ovl || tw != ovl_tw || th != ovl_th) { gl_new_tex(&tex_ovl, tw, th); ovl_tw = tw; ovl_th = th; }
-            glBindTexture(GL_TEXTURE_2D, tex_ovl);
-            glPixelStorei(GL_UNPACK_ROW_LENGTH, back_w);
-            glTexSubImage2D(GL_TEXTURE_2D, 0, r[0], r[1], r[2], r[3], GL_BGRA_EXT, GL_UNSIGNED_BYTE,
-                            (const uint32_t *)back_bits + (size_t)r[1] * back_w + r[0]);
+            if (!tex_ovl || tw != ovl_tw || th != ovl_th) { gl_new_tex(&tex_ovl, tw, th); ovl_tw = tw; ovl_th = th; same_set = 0; }
+            uint32_t hsh = 2166136261u;
+            for (int yy = 0; yy < r[3]; yy++) {
+                const uint32_t *row = (const uint32_t *)back_bits + (size_t)(r[1] + yy) * back_w + r[0];
+                for (int xx = 0; xx < r[2]; xx++) hsh = (hsh ^ row[xx]) * 16777619u;
+            }
+            if (!same_set || hsh != last_hash[k]) {
+                glBindTexture(GL_TEXTURE_2D, tex_ovl);
+                glPixelStorei(GL_UNPACK_ROW_LENGTH, back_w);
+                glTexSubImage2D(GL_TEXTURE_2D, 0, r[0], r[1], r[2], r[3], GL_BGRA_EXT, GL_UNSIGNED_BYTE,
+                                (const uint32_t *)back_bits + (size_t)r[1] * back_w + r[0]);
+                last_hash[k] = hsh;
+            }
             gl_quad(tex_ovl, ovl_tw, ovl_th, r[0], r[1], r[2], r[3], r[0], r[1], r[2], r[3], 0);
         }
+        last_tw = tw; last_th = th;
         glPixelStorei(GL_UNPACK_ROW_LENGTH, 0);
         SwapBuffers(gl_dc);
         return;
@@ -1507,16 +1552,41 @@ static void draw_minimap(int px, int py, int pw, int ph)
 /* the party panel, top left: for each member a portrait (from the ROM,
  * src/portraits.c) with the level, then the HP bar with numbers and a thin
  * TP bar; the leader's frame is gold, a fallen member is greyed out */
+static void scale_portrait(const uint32_t *src, uint32_t *dst, int s, int grey);
+/* scaled portraits are kept (a few sizes and the greyed versions), so the
+ * panel costs a copy per frame */
 static void put_portrait(const uint32_t *src, int x0, int y0, int s, int grey)
 {
+    static struct { const uint32_t *src; int s, grey; uint32_t *pix; } cache[16];
+    static int next;
+    uint32_t *pix = 0;
+    for (int i = 0; i < 16; i++) if (cache[i].pix && cache[i].src == src && cache[i].s == s && cache[i].grey == grey) pix = cache[i].pix;
+    if (!pix) {
+        int i = next++ & 15;
+        free(cache[i].pix);
+        cache[i].pix = pix = malloc((size_t)s * s * 4);
+        if (!pix) return;
+        cache[i].src = src; cache[i].s = s; cache[i].grey = grey;
+        scale_portrait(src, pix, s, grey);
+    }
     uint32_t *dst = (uint32_t *)back_bits;
     for (int y = 0; y < s; y++) {
         int yy = y0 + y; if (yy < 0 || yy >= back_h) continue;
+        int x = 0, w = s;
+        if (x0 < 0) { x = -x0; } if (x0 + w > back_w) w = back_w - x0;
+        if (w > x) memcpy(dst + (size_t)yy * back_w + x0 + x, pix + (size_t)y * s + x, (size_t)(w - x) * 4);
+    }
+}
+static void scale_portrait(const uint32_t *src, uint32_t *out, int s, int grey)
+{
+    int x0 = 0, y0 = 0;
+    for (int y = 0; y < s; y++) {
+        int yy = y0 + y;
         float fy = (y + 0.5f) * PORTRAIT_W / s - 0.5f; int iy = (int)fy; float ay = fy - iy;
         if (fy < 0) { iy = 0; ay = 0; }
         if (iy >= PORTRAIT_W - 1) { iy = PORTRAIT_W - 2; ay = 1; }
         for (int x = 0; x < s; x++) {
-            int xx = x0 + x; if (xx < 0 || xx >= back_w) continue;
+            int xx = x0 + x;
             float fx = (x + 0.5f) * PORTRAIT_W / s - 0.5f; int ix = (int)fx; float ax = fx - ix;
             if (fx < 0) { ix = 0; ax = 0; }
             if (ix >= PORTRAIT_W - 1) { ix = PORTRAIT_W - 2; ax = 1; }
@@ -1532,7 +1602,7 @@ static void put_portrait(const uint32_t *src, int x0, int y0, int s, int grey)
                 c[k] = a * (1 - ay) + b * ay;
             }
             if (grey) { float l = (c[0] * 0.3f + c[1] * 0.59f + c[2] * 0.11f) * 0.55f; c[0] = c[1] = c[2] = l; }
-            dst[(size_t)yy * back_w + xx] = (uint32_t)c[0] << 16 | (uint32_t)c[1] << 8 | (uint32_t)c[2];
+            out[(size_t)yy * s + xx] = (uint32_t)c[0] << 16 | (uint32_t)c[1] << 8 | (uint32_t)c[2];
         }
     }
 }
@@ -1637,6 +1707,124 @@ static int quickbar_hit(int mx, int my)
 }
 static void quickbar_act(int k);
 
+/* monster pictures for the HP panel and the bestiary, taken from the battle
+ * picture itself (the ROM in use; kept in saves\monsters\<id>.png). In
+ * battle the monsters are drawn on plane A (low priority; the party is on
+ * high-priority plane A, the scenery on plane B). While the game waits for
+ * orders and every monster is unhurt, those pixels in the upper part of the
+ * picture (the VDP's layer map) fall into groups of columns, one per
+ * monster, left to right in the game's order. */
+#define MON_PIX(l) ((l) == 2 || (l) == 3)
+typedef struct { int tried, w, h; uint32_t *px; } mthumb_t;   /* px: 0xAARRGGBB, alpha 0 or 255 */
+static mthumb_t mthumb[BEST_MAX];
+static void mthumb_path(wchar_t *p, int id) { wchar_t n[64]; _snwprintf(n, 63, L"saves\\monsters\\%03d.png", id); n[63] = 0; path_in_exe_dir(p, n); }
+static const mthumb_t *monster_thumb(int id)
+{
+    if (id < 0 || id >= BEST_MAX) return 0;
+    mthumb_t *t = &mthumb[id];
+    if (!t->px && !t->tried) {
+        t->tried = 1;
+        wchar_t p[700]; mthumb_path(p, id);
+        size_t n = 0; uint8_t *b = read_file(p, &n);
+        if (b) {
+            int w, h; const char *e; uint8_t *rgba = png_decode(b, n, &w, &h, &e);
+            if (rgba && w > 0 && h > 0 && w <= 256 && h <= 256) {
+                t->px = malloc((size_t)w * h * 4); t->w = w; t->h = h;
+                for (int i = 0; i < w * h; i++)
+                    t->px[i] = (rgba[i * 4 + 3] > 127 ? 0xFF000000u : 0) | (uint32_t)rgba[i * 4] << 16 | (uint32_t)rgba[i * 4 + 1] << 8 | rgba[i * 4 + 2];
+            }
+            free(rgba); free(b);
+        }
+    }
+    return t->px ? t : 0;
+}
+static void monster_capture(void)
+{
+    static uint64_t last;
+    if (frame_no - last < 15) return;
+    last = frame_no;
+    int ids[8], hp[8], mx[8];
+    int n = bestiary_battle(ids, hp, mx, 8);
+    if (n <= 0 || emu_work_ram()[0x4109] == 0) return;   /* not waiting for orders */
+    int alive[8], na = 0, need = 0;
+    for (int i = 0; i < n; i++) if (hp[i] > 0) {
+        if (hp[i] < mx[i]) return;                         /* someone is hurt: may be flashing */
+        alive[na++] = i;
+        if (ids[i] >= 0 && ids[i] < BEST_MAX && !monster_thumb(ids[i])) need = 1;
+    }
+    if (!na || !need) return;
+    int W, H; const uint32_t *fb = emu_framebuffer(&W, &H);
+    const uint8_t *lay = emu_layers();
+    int top = 4, zone = H * 56 / 100, bottom = H * 74 / 100;
+    /* columns with sprite pixels in the upper part, grouped (gaps up to 3) */
+    static uint8_t col[MD_W_MAX];
+    for (int x = 0; x < W; x++) { col[x] = 0; for (int y = top; y < zone; y++) if (MON_PIX(lay[y * MD_W_MAX + x])) { col[x] = 1; break; } }
+    int sx[8], ex[8], ns = 0;
+    for (int x = 0; x < W; ) {
+        if (!col[x]) { x++; continue; }
+        int a = x, b = x;
+        while (b + 1 < W && (col[b + 1] || (b + 2 < W && col[b + 2]) || (b + 3 < W && col[b + 3]) || (b + 4 < W && col[b + 4]))) { b++; }
+        while (b > a && !col[b]) b--;
+        if (b - a + 1 >= 12) { if (ns == 8) return; sx[ns] = a; ex[ns] = b; ns++; }
+        x = b + 1;
+    }
+    if (ns != na) return;
+    saves_dir();
+    { wchar_t d[700]; path_in_exe_dir(d, L"saves\\monsters"); CreateDirectoryW(d, 0); }
+    for (int k = 0; k < ns; k++) {
+        int id = ids[alive[k]];
+        if (id < 0 || id >= BEST_MAX || monster_thumb(id)) continue;
+        /* rows: from the first sprite row down to a gap of 3 empty rows */
+        int y0 = -1, y1 = -1, gap = 0;
+        for (int y = top; y < bottom; y++) {
+            int any = 0;
+            for (int x = sx[k]; x <= ex[k]; x++) if (MON_PIX(lay[y * MD_W_MAX + x])) { any = 1; break; }
+            if (any) { if (y0 < 0) y0 = y; y1 = y; gap = 0; }
+            else if (y0 >= 0 && ++gap >= 3) break;
+        }
+        if (y0 < 0 || y1 - y0 + 1 < 12 || ex[k] - sx[k] + 1 > 200) continue;
+        int w = ex[k] - sx[k] + 1, h = y1 - y0 + 1;
+        uint8_t *rgba = calloc((size_t)w * h, 4);
+        if (!rgba) return;
+        for (int y = 0; y < h; y++)
+            for (int x = 0; x < w; x++) {
+                int o = (y0 + y) * MD_W_MAX + sx[k] + x;
+                if (!MON_PIX(lay[o])) continue;
+                uint32_t c = fb[o];
+                uint8_t *q = rgba + ((size_t)y * w + x) * 4;
+                q[0] = (uint8_t)(c >> 16); q[1] = (uint8_t)(c >> 8); q[2] = (uint8_t)c; q[3] = 255;
+            }
+        size_t pn; uint8_t *png = png_encode(rgba, w, h, &pn);
+        free(rgba);
+        if (png) {
+            wchar_t p[700]; mthumb_path(p, id);
+            if (write_file(p, png, pn)) { mthumb[id].tried = 0; free(mthumb[id].px); mthumb[id].px = 0; monster_thumb(id); logw("monster picture %d: %dx%d", id, w, h); }
+            free(png);
+        }
+    }
+}
+/* a monster picture fitted into a box (keeping its shape, whole pixels when possible) */
+static int draw_thumb(int bx, int by, int bw, int bh, int id)
+{
+    const mthumb_t *t = monster_thumb(id);
+    if (!t) return 0;
+    double sc = (double)bw / t->w; if ((double)bh / t->h < sc) sc = (double)bh / t->h;
+    if (sc >= 1) sc = (int)sc;
+    int dw = (int)(t->w * sc), dh = (int)(t->h * sc); if (dw < 1) dw = 1; if (dh < 1) dh = 1;
+    int x0 = bx + (bw - dw) / 2, y0 = by + (bh - dh) / 2;
+    uint32_t *dst = (uint32_t *)back_bits;
+    for (int y = 0; y < dh; y++) {
+        int yy = y0 + y; if (yy < 0 || yy >= back_h) continue;
+        const uint32_t *row = t->px + (size_t)(y * t->h / dh) * t->w;
+        for (int x = 0; x < dw; x++) {
+            int xx = x0 + x; if (xx < 0 || xx >= back_w) continue;
+            uint32_t c = row[x * t->w / dw];
+            if (c >> 24) dst[(size_t)yy * back_w + xx] = c & 0xFFFFFF;
+        }
+    }
+    return 1;
+}
+
 /* the elements a monster is weak to, as icons (from the bestiary's text:
  * "огонь, лёд (очень)") */
 static int weak_icons(const char *weak, int *ic, int *strong, int max)
@@ -1670,6 +1858,7 @@ static void draw_enemy_hp(int px, int py, int pw, int ph)
     int ids[8], hp[8], mx[8];
     int n = bestiary_battle(ids, hp, mx, 8);
     if (n <= 0) return;
+    monster_capture();
     wchar_t nm[8][48]; int alive = 0, wname = 0, nweak[8], wic[8][8], wst[8][8], mach[8], maxweak = 0;
     for (int i = 0; i < n; i++) {
         best_info_t b;
@@ -1680,10 +1869,12 @@ static void draw_enemy_hp(int px, int py, int pw, int ph)
         if (hp[i] > 0) { alive++; int w = text_w(nm[i], font_small); if (w > wname) wname = w; if (nweak[i] > maxweak) maxweak = nweak[i]; }
     }
     if (!alive) return;
-    int lh = font_h * 6 / 5, pad = font_h / 3, barw = font_h * 4, numw = text_w(L"0000/0000", font_small);
-    int isz = font_h * 9 / 10, ist = isz + font_h / 4;
+    int thumbs = 0;
+    for (int i = 0; i < n; i++) if (hp[i] > 0 && monster_thumb(ids[i])) thumbs = 1;
+    int lh = thumbs ? font_h * 5 / 2 : font_h * 6 / 5, pad = font_h / 3, barw = font_h * 4, numw = text_w(L"0000/0000", font_small);
+    int isz = font_h * 9 / 10, ist = isz + font_h / 4, pic = thumbs ? lh - 4 : isz, pst = pic + font_h / 4;
     int ww = maxweak ? font_h / 2 + maxweak * ist : 0;
-    int bw = pad * 3 + ist + wname + font_h / 2 + barw + font_h / 2 + numw + ww, bh = alive * lh + pad * 2;
+    int bw = pad * 3 + pst + wname + font_h / 2 + barw + font_h / 2 + numw + ww, bh = alive * lh + pad * 2;
     int bx = px + pw - bw - font_h / 3, by = py + font_h / 3;
     fill(bx, by, bw, bh, RGBC(150, 160, 200));
     fill(bx + 1, by + 1, bw - 2, bh - 2, RGBC(10, 20, 60));
@@ -1691,16 +1882,16 @@ static void draw_enemy_hp(int px, int py, int pw, int ph)
     for (int i = 0; i < n; i++) {
         if (hp[i] <= 0) continue;
         int m = mx[i] > 0 ? mx[i] : hp[i];
-        int iy = ty + (lh - isz) / 2 - 1;
-        draw_icon(bx + pad, iy, isz, mach[i] ? IC_GEAR : IC_SKULL, 0);
-        draw_text(bx + pad + ist, ty, nm[i], RGBC(230, 230, 255), font_small);
-        int x = bx + pad * 2 + ist + wname + font_h / 2, yb = ty + lh / 3, hb = lh / 3;
+        int iy = ty + (lh - isz) / 2 - 1, tyy = ty + (lh - font_h) / 2;
+        if (!draw_thumb(bx + pad, ty + 2, pic, lh - 4, ids[i])) draw_icon(bx + pad + (pic - isz) / 2, iy, isz, mach[i] ? IC_GEAR : IC_SKULL, 0);
+        draw_text(bx + pad + pst, tyy, nm[i], RGBC(230, 230, 255), font_small);
+        int x = bx + pad * 2 + pst + wname + font_h / 2, yb = ty + lh / 2 - font_h / 6, hb = font_h / 3;
         int f = m ? barw * (hp[i] > m ? m : hp[i]) / m : 0;
         DWORD col = hp[i] * 4 <= m ? RGBC(240, 80, 70) : hp[i] * 2 <= m ? RGBC(240, 200, 70) : RGBC(90, 220, 110);
         fill(x, yb, barw, hb, RGBC(40, 40, 70));
         if (f > 0) fill(x, yb, f, hb, col);
         wchar_t t[24]; _snwprintf(t, 23, L"%d/%d", hp[i], m); t[23] = 0;
-        draw_text(x + barw + font_h / 2, ty, t, RGBC(200, 210, 240), font_small);
+        draw_text(x + barw + font_h / 2, tyy, t, RGBC(200, 210, 240), font_small);
         int wx = x + barw + font_h / 2 + numw + font_h / 2;
         for (int k = 0; k < nweak[i]; k++) {
             if (wst[i][k]) fill(wx + k * ist - 2, iy - 2, isz + 4, isz + 4, RGBC(214, 176, 92));
@@ -2075,7 +2266,8 @@ static void build_menu_pages(void)
             _snwprintf(val[i], 79, L"ЕЖ %d · опыт %d · %d мес · побеждено %u", b.hp, b.exp, b.meseta, b.killed);
             m_best_ids[i] = ids[m_best_page * 10 + i];
             val[i][79] = 0;
-            add(lab[i], val[i]);
+            add_i(b.machine ? IC_GEAR : IC_SKULL, lab[i], val[i]);
+            items[nitems - 1].icon = 1000 + ids[m_best_page * 10 + i];   /* its picture, once seen in battle */
         }
         if (!n) add(L"Пока никого — загляните сюда после первого боя", 0);
         m_best_next = -1;
@@ -2133,6 +2325,7 @@ static void build_menu_pages(void)
         add(L"Миникарта: только пройденное", onoff(C.fog));
         add(L"Панель отряда (портреты, ЕЖ, ЕТ)", onoff(C.party_hud));
         add(L"Кнопки быстрого доступа", onoff(C.quickbar));
+        add(L"Показывать FPS и время кадра", onoff(C.show_fps));
         add(L"Назад", 0);
         break;
     case M_SPEED: {
@@ -2435,6 +2628,7 @@ static void launcher_reopen(void)
 {
     slots_refresh();
     launcher_open = 1; l_page = 0;
+    music_play(0);
     l_sel = latest_slot() >= 0 ? 0 : 2;
     l_opened = now_ms();
 }
@@ -2442,6 +2636,7 @@ static void launcher_reopen(void)
 static void launcher_start_game(void)
 {
     launcher_open = 0;
+    music_stop();   /* fades out over the game's own sound */
     game_fade_from = now_ms();
     pace_reset_ext();
 }
@@ -2532,7 +2727,11 @@ static void draw_menu(void)
         item_y[item_count++] = yy;
         if (i == m_sel && !items[i].info) fill(px + font_h / 2, yy - 2, lw - font_h, lh, RGBC(60, 90, 170));
         int tx = px + font_h;
-        if (items[i].icon) { int isz = font_h * 9 / 10; draw_icon(tx, yy + (lh - isz) / 2 - 2, isz, items[i].icon, 0); tx += isz + font_h / 2; }
+        if (items[i].icon >= 1000) {   /* a monster's picture (the bestiary), or a skull until one is taken */
+            int isz = lh;
+            if (!draw_thumb(tx, yy - 2, isz, isz, items[i].icon - 1000)) draw_icon(tx + (isz - font_h) / 2, yy + (lh - font_h) / 2, font_h * 9 / 10, IC_SKULL, 1);
+            tx += isz + font_h / 2;
+        } else if (items[i].icon) { int isz = font_h * 9 / 10; draw_icon(tx, yy + (lh - isz) / 2 - 2, isz, items[i].icon, 0); tx += isz + font_h / 2; }
         draw_text(tx, yy, items[i].label, items[i].info ? RGBC(200, 208, 236) : i == m_sel ? RGBC(255, 255, 160) : RGBC(225, 230, 255), font_small);
         if (items[i].value[0]) {
             int tw = text_w(items[i].value, font_small);
@@ -2590,7 +2789,8 @@ static void menu_act(int dir)
         case 4: C.fog = !C.fog; emu_set_fog(C.fog); break;
         case 5: C.party_hud = !C.party_hud; break;
         case 6: C.quickbar = !C.quickbar; break;
-        case 7: if (!dir) { m_page = M_SET; m_sel = 3; } break;
+        case 7: C.show_fps = !C.show_fps; break;
+        case 8: if (!dir) { m_page = M_SET; m_sel = 3; } break;
         }
     } else if (m_page == M_VIDEO) {
         int d = dir ? dir : 1;
@@ -2866,8 +3066,33 @@ static void cine_update(void)
 
 /* one displayed frame: 1 or more emulated frames, their sound, the picture */
 static int16_t snd[8192];
+/* the frame rate and where the time goes (setting "Показывать FPS") */
+static double perf_emu, perf_out, perf_shown_emu, perf_shown_out; static int perf_frames, perf_fps; static uint64_t perf_t0;
+static double perf_now(void) { static int64_t f; int64_t c; if (!f) QueryPerformanceFrequency(&f); QueryPerformanceCounter(&c); return (double)c * 1000.0 / (double)f; }
+static void perf_frame(double emu_ms, double out_ms)
+{
+    perf_emu += emu_ms; perf_out += out_ms; perf_frames++;
+    uint64_t t = now_ms();
+    if (!perf_t0) perf_t0 = t;
+    if (t - perf_t0 >= 1000) {
+        perf_fps = (int)(perf_frames * 1000 / (t - perf_t0));
+        perf_shown_emu = perf_emu / perf_frames; perf_shown_out = perf_out / perf_frames;
+        perf_emu = perf_out = 0; perf_frames = 0; perf_t0 = t;
+    }
+}
+static void draw_fps(void)
+{
+    if (!C.show_fps || !perf_fps) return;
+    wchar_t t[120]; _snwprintf(t, 119, L"%d кадр/с · эмуляция %.1f мс · вывод %.1f мс", perf_fps, perf_shown_emu, perf_shown_out); t[119] = 0;
+    int tw = text_w(t, font_small) + font_h, th = font_h + 4, x = (back_w - tw) / 2, y = 2;
+    fill(x, y, tw, th, RGBC(0, 0, 0));
+    draw_text(x + font_h / 2, y + 2, t, perf_fps >= 55 ? RGBC(140, 255, 150) : perf_fps >= 40 ? RGBC(255, 220, 120) : RGBC(255, 130, 120), font_small);
+    fps_rect[0] = x; fps_rect[1] = y; fps_rect[2] = tw; fps_rect[3] = th;
+}
+
 static void game_frames(int fast)
 {
+    double perf_a = perf_now();
     g_hd_track = hd_on() || C.hd_auto;
     emu_set_pad(0, game_pad());
     int frames = fast ? C.turbo_speed : 1;
@@ -2897,7 +3122,9 @@ static void game_frames(int fast)
     }
     emu_set_sound_hold(0);
     if (C.hd_auto) hd_auto_capture();
+    double perf_b = perf_now();
     present();
+    perf_frame(perf_b - perf_a, perf_now() - perf_b);
     static int last_mode = -1;
     int mode = emu_game_mode();
     if (mode != last_mode) { logw("game mode %02X, 68k pc %06X", mode, emu_cpu_pc()); last_mode = mode; }
@@ -3089,9 +3316,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.43");
+    diag_init(exe_dir, "0.44");
     diag_info = settings_info;
-    logw("start, version 0.43");
+    logw("start, version 0.44");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
@@ -3163,6 +3390,8 @@ static int run(void)
     if (C.fullscreen) toggle_fullscreen();
     timeBeginPeriod(1);
     audio_init();
+    music_open();
+    if (launcher_open) music_play(0);
     emu_set_audio_tone(C.tone);
     emu_set_cutscene_detect(C.cine);
     emu_set_conveniences(C.encounters, C.exp_mul, C.mes_mul);
@@ -3203,6 +3432,7 @@ static int run(void)
             continue;
         }
         if (launcher_open || menu_open) {
+            if (launcher_open) music_feed();
             poll_pads();
             if (menu_open) menu_pad(); else launcher_pad();
             present();
