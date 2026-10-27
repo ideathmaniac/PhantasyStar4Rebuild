@@ -915,9 +915,9 @@ static void touch_layout(int W, int H)
         tb[TB_B]     = (tbtn_t){ tb[TB_C].x - s, cy, rb, "B" };
         tb[TB_A]     = (tbtn_t){ tb[TB_B].x - s, cy + s * 0.35f, rb, "A" };
         float mid = W / 2.0f, gap = rs * 3.0f;
-        tb[TB_MENU]  = (tbtn_t){ mid - gap, cy + rs * 1.2f, rs, "Меню" };
-        tb[TB_START] = (tbtn_t){ mid, cy + rs * 1.2f, rs, "Start" };
-        tb[TB_TURBO] = (tbtn_t){ mid + gap, cy + rs * 1.2f, rs, "»" };
+        tb[TB_MENU]  = (tbtn_t){ mid - gap, cy + rs * 1.2f, rs, "МЕНЮ" };
+        tb[TB_START] = (tbtn_t){ mid, cy + rs * 1.2f, rs, "START" };
+        tb[TB_TURBO] = (tbtn_t){ mid + gap, cy + rs * 1.2f, rs, "ТУРБО" };
     } else {
         float lim = (H < W ? H : W);
         if (rd > lim * 0.2f) rd = lim * 0.2f;
@@ -928,9 +928,10 @@ static void touch_layout(int W, int H)
         tb[TB_C]     = (tbtn_t){ W - m - rb, H - m - rb - s * 0.75f, rb, "C" };
         tb[TB_B]     = (tbtn_t){ tb[TB_C].x - s, tb[TB_C].y + s * 0.35f, rb, "B" };
         tb[TB_A]     = (tbtn_t){ tb[TB_B].x - s, tb[TB_B].y + s * 0.35f, rb, "A" };
-        tb[TB_MENU]  = (tbtn_t){ W / 2.0f - rs * 1.7f, H - m - rs, rs, "Меню" };
-        tb[TB_START] = (tbtn_t){ W / 2.0f + rs * 1.7f, H - m - rs, rs, "Start" };
-        tb[TB_TURBO] = (tbtn_t){ W - m - rs, tb[TB_C].y - rb - mm(9), rs, "»" };
+        /* the small ones at the edges, clear of the game's windows at the bottom */
+        tb[TB_TURBO] = (tbtn_t){ W - m - rs * 1.4f, tb[TB_C].y - rb - mm(9), rs, "ТУРБО" };
+        tb[TB_START] = (tbtn_t){ W - m - rs * 1.4f, tb[TB_TURBO].y - rs * 3.4f, rs, "START" };
+        tb[TB_MENU]  = (tbtn_t){ m + rs * 1.4f, m + rs * 0.9f, rs, "МЕНЮ" };
     }
 }
 /* d-pad bits from a point (8 directions, a dead zone in the middle) */
@@ -1061,28 +1062,95 @@ static void label(int i, int px, float cx, float cy, int alpha)
     if (draw_gl) gles_image(g_label[i], r.x, r.y, r.w, r.h, alpha);
     else { SDL_SetTextureAlphaMod(t_label[i], (Uint8)alpha); SDL_RenderCopyF(ren, t_label[i], 0, &r); }
 }
+/* a filled rounded rectangle (r = h/2: a pill, r = w/2 = h/2: a circle),
+ * turned by ang radians around its centre; one fan, so no part is drawn
+ * twice (matters when it is half transparent) */
+static void round_shape(float cx, float cy, float w, float h, float r, float ang, SDL_Color c)
+{
+    float pt[4 * 13][2]; int n = 0;
+    if (r > w / 2) r = w / 2;
+    if (r > h / 2) r = h / 2;
+    float ox[4] = { w / 2 - r, -(w / 2 - r), -(w / 2 - r), w / 2 - r }, oy[4] = { h / 2 - r, h / 2 - r, -(h / 2 - r), -(h / 2 - r) };
+    for (int k = 0; k < 4; k++)
+        for (int i = 0; i <= 12; i++) {
+            float t = (k * 90 + i * 7.5f) * 0.0174533f;
+            pt[n][0] = ox[k] + r * SDL_cosf(t); pt[n][1] = oy[k] + r * SDL_sinf(t); n++;
+        }
+    float cs = SDL_cosf(ang), sn = SDL_sinf(ang), xy[4 * 13 * 6]; int m = 0;
+    for (int i = 0; i < n; i++) {
+        float *p0 = pt[i], *p1 = pt[(i + 1) % n];
+        xy[m++] = cx; xy[m++] = cy;
+        xy[m++] = cx + p0[0] * cs - p0[1] * sn; xy[m++] = cy + p0[0] * sn + p0[1] * cs;
+        xy[m++] = cx + p1[0] * cs - p1[1] * sn; xy[m++] = cy + p1[0] * sn + p1[1] * cs;
+    }
+    tris(xy, m / 2, c);
+}
+static SDL_Color rgba(int r, int g, int b, int a) { SDL_Color c = { (Uint8)r, (Uint8)g, (Uint8)b, (Uint8)a }; return c; }
+
+/* the pad: a retro console controller look of our own (dark body, dished
+ * d-pad, glossy round A B C on a slanted bed, slanted Start-style pills) */
 static void touch_draw_common(int W, int H)
 {
     touch_layout(W, H);
-    int a = panel_h ? 2 : 1;   /* in the panel nothing is covered: stronger */
-    SDL_Color base = { 255, 255, 255, (Uint8)(40 * a) }, lit = { 255, 220, 120, (Uint8)(95 * a) }, dark = { 0, 0, 0, (Uint8)(panel_h ? 0 : 50) };
-    SDL_Color ring = { 255, 255, 255, (Uint8)(panel_h ? 30 : 0) };
-    tbtn_t *d = &tb[TB_DPAD];
-    if (ring.a) fill_circle(d->x, d->y, d->r, ring);
-    if (dark.a) fill_circle(d->x, d->y, d->r, dark);
-    float q = d->r * 0.3f, l = d->r * 0.88f;
-    float arms[4][4] = { { d->x - q, d->y - l, 2 * q, l - q }, { d->x - q, d->y + q, 2 * q, l - q },
-                         { d->x - l, d->y - q, l - q, 2 * q }, { d->x + q, d->y - q, l - q, 2 * q } };
-    WORD bits[4] = { XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_DPAD_DOWN, XINPUT_GAMEPAD_DPAD_LEFT, XINPUT_GAMEPAD_DPAD_RIGHT };
-    for (int i = 0; i < 4; i++) fill_rect(arms[i][0], arms[i][1], arms[i][2], arms[i][3], (touch_buttons & bits[i]) ? lit : base);
-    fill_rect(d->x - q, d->y - q, 2 * q, 2 * q, base);
-    WORD bb[TB_N] = { 0, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_START, XINPUT_GAMEPAD_BACK, 0 };
-    for (int i = TB_A; i < TB_N; i++) {
-        int on = i == TB_TURBO ? turbo_held : (touch_buttons & bb[i]) != 0;
-        fill_circle(tb[i].x, tb[i].y, tb[i].r, on ? lit : base);
-        int px = (int)(tb[i].r * (i <= TB_C ? 1.0f : i == TB_TURBO ? 1.1f : 0.62f));
-        label(i, px < 8 ? 8 : px, tb[i].x, tb[i].y, panel_h ? 230 : 160);
+    int op = panel_h ? 255 : 105;               /* over the picture: half transparent */
+#define A(x) ((x) * op / 255)
+    if (panel_h) {   /* the body, with a lighter top edge */
+        float m = mm(1.5f), top = (float)(H - panel_h) + m, bh = panel_h - 2 * m;
+        round_shape(W / 2.0f, top + bh / 2, W - 2 * m, bh, bh * 0.35f, 0, rgba(46, 46, 52, 255));
+        round_shape(W / 2.0f, top + bh / 2 + mm(0.6f), W - 2 * m - mm(1.2f), bh - mm(1.2f), bh * 0.34f, 0, rgba(24, 24, 28, 255));
     }
+    /* d-pad: a dished disc and a cross on it */
+    tbtn_t *d = &tb[TB_DPAD];
+    round_shape(d->x, d->y, d->r * 2.05f, d->r * 2.05f, d->r * 1.03f, 0, rgba(12, 12, 14, A(230)));
+    round_shape(d->x, d->y, d->r * 1.9f, d->r * 1.9f, d->r * 0.95f, 0, rgba(44, 44, 50, A(235)));
+    round_shape(d->x, d->y - d->r * 0.05f, d->r * 1.7f, d->r * 1.7f, d->r * 0.85f, 0, rgba(36, 36, 41, A(235)));
+    float q = d->r * 0.31f, l = d->r * 0.86f;
+    for (int pass = 0; pass < 2; pass++) {      /* a shadow, then the cross */
+        float sh = pass ? 0 : d->r * 0.06f;
+        SDL_Color c = pass ? rgba(70, 70, 78, A(245)) : rgba(8, 8, 10, A(200));
+        round_shape(d->x, d->y + sh, 2 * q, 2 * l, q * 0.3f, 0, c);
+        round_shape(d->x, d->y + sh, 2 * l, 2 * q, q * 0.3f, 0, c);
+    }
+    WORD bits[4] = { XINPUT_GAMEPAD_DPAD_UP, XINPUT_GAMEPAD_DPAD_DOWN, XINPUT_GAMEPAD_DPAD_LEFT, XINPUT_GAMEPAD_DPAD_RIGHT };
+    float ax[4] = { 0, 0, -1, 1 }, ay[4] = { -1, 1, 0, 0 };
+    for (int i = 0; i < 4; i++) {
+        float cx = d->x + ax[i] * (l + q) / 2, cy = d->y + ay[i] * (l + q) / 2;
+        float w = ax[i] ? l - q : 2 * q * 0.8f, h = ax[i] ? 2 * q * 0.8f : l - q;
+        if (touch_buttons & bits[i]) round_shape(cx, cy, w, h, q * 0.25f, 0, rgba(30, 30, 34, A(255)));
+        else {   /* a small arrow-like ridge on each arm */
+            float r = q * 0.28f;
+            round_shape(cx + ax[i] * (l - q) * 0.18f, cy + ay[i] * (l - q) * 0.18f, r, r, r / 2, 0, rgba(110, 110, 120, A(200)));
+        }
+    }
+    round_shape(d->x, d->y, q * 0.9f, q * 0.9f, q * 0.45f, 0, rgba(56, 56, 62, A(255)));
+    /* A B C: a slanted bed, then each button with a shadow and a gloss */
+    float slant = SDL_atan2f(tb[TB_C].y - tb[TB_A].y, tb[TB_C].x - tb[TB_A].x);
+    float bx = (tb[TB_A].x + tb[TB_C].x) / 2, by = (tb[TB_A].y + tb[TB_C].y) / 2;
+    float blen = SDL_sqrtf((tb[TB_C].x - tb[TB_A].x) * (tb[TB_C].x - tb[TB_A].x) + (tb[TB_C].y - tb[TB_A].y) * (tb[TB_C].y - tb[TB_A].y));
+    float rb = tb[TB_A].r;
+    round_shape(bx, by, blen + rb * 2.7f, rb * 2.7f, rb * 1.35f, slant, rgba(12, 12, 14, A(220)));
+    round_shape(bx, by, blen + rb * 2.45f, rb * 2.45f, rb * 1.22f, slant, rgba(30, 30, 35, A(230)));
+    WORD bb[TB_N] = { 0, XINPUT_GAMEPAD_X, XINPUT_GAMEPAD_B, XINPUT_GAMEPAD_A, XINPUT_GAMEPAD_START, XINPUT_GAMEPAD_BACK, 0 };
+    for (int i = TB_A; i <= TB_C; i++) {
+        tbtn_t *b = &tb[i]; int on = (touch_buttons & bb[i]) != 0;
+        float sink = on ? b->r * 0.06f : 0;
+        if (!on) round_shape(b->x, b->y + b->r * 0.1f, b->r * 2, b->r * 2, b->r, 0, rgba(4, 4, 6, A(220)));
+        round_shape(b->x, b->y + sink, b->r * 2, b->r * 2, b->r, 0, on ? rgba(34, 34, 40, A(255)) : rgba(58, 58, 66, A(255)));
+        round_shape(b->x, b->y + sink + b->r * 0.04f, b->r * 1.7f, b->r * 1.7f, b->r * 0.85f, 0, on ? rgba(28, 28, 33, A(255)) : rgba(44, 44, 51, A(255)));
+        if (!on) round_shape(b->x - b->r * 0.32f, b->y - b->r * 0.38f, b->r * 0.7f, b->r * 0.34f, b->r * 0.17f, -0.5f, rgba(255, 255, 255, A(40)));
+        label(i, (int)(b->r * 0.95f) < 8 ? 8 : (int)(b->r * 0.95f), b->x, b->y + sink + b->r * 0.03f, on ? A(150) : A(215));
+    }
+    /* Меню, Start, turbo: slanted pills, the name under each */
+    for (int i = TB_START; i < TB_N; i++) {
+        tbtn_t *b = &tb[i];
+        int on = i == TB_TURBO ? turbo_held : (touch_buttons & bb[i]) != 0;
+        float w = b->r * 2.3f, h = b->r * 0.95f;
+        round_shape(b->x, b->y, w + b->r * 0.35f, h + b->r * 0.35f, (h + b->r * 0.35f) / 2, -0.35f, rgba(10, 10, 12, A(220)));
+        round_shape(b->x, b->y + (on ? b->r * 0.05f : 0), w, h, h / 2, -0.35f, on ? rgba(36, 36, 42, A(255)) : rgba(72, 72, 80, A(255)));
+        int px = (int)(b->r * 0.55f); if (px < 8) px = 8;
+        label(i, px, b->x, b->y + b->r * 1.1f, A(200));
+    }
+#undef A
 }
 static void touch_draw(void)        /* SDL renderer */
 {
