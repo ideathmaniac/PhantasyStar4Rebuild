@@ -130,14 +130,14 @@ static wchar_t exe_dir[600];
 static int quit, menu_open, fullscreen;
 static RECT saved_rect;
 static uint8_t keys[256];
-static wchar_t status_msg[200];
+static wchar_t status_msg[400];
 static uint64_t status_until, frame_no;
 static int64_t qpc_freq;
 static int ws_ext_for_mode[3] = { 0, 32, 53 };
 
 static uint64_t now_ms(void) { int64_t t; QueryPerformanceCounter(&t); return (uint64_t)(t * 1000 / qpc_freq); }
 static void path_in_exe_dir(wchar_t *out, const wchar_t *name) { wcscpy(out, exe_dir); wcscat(out, name); }
-static void set_status(const wchar_t *msg) { wcscpy(status_msg, msg); status_until = now_ms() + 2500; }
+static void set_status(const wchar_t *msg) { wcsncpy(status_msg, msg, 399); status_msg[399] = 0; status_until = now_ms() + 2500; }
 
 /* log.txt next to the exe: what happened, for bug reports */
 static FILE *g_logf;
@@ -1429,7 +1429,7 @@ static void draw_enemy_hp(int px, int py, int pw, int ph)
         if (!emu_bestiary(ids[i], &b)) return;
         MultiByteToWideChar(65001, 0, b.name, -1, nm[i], 48);
         wk[i][0] = 0;
-        if (b.weak[0]) { wchar_t w2[100]; MultiByteToWideChar(65001, 0, b.weak, -1, w2, 100); _snwprintf(wk[i], 109, L"слаб: %ls", w2); wk[i][109] = 0; }
+        if (b.weak[0]) { wchar_t w2[260]; MultiByteToWideChar(65001, 0, b.weak, -1, w2, 260); _snwprintf(wk[i], 109, L"слаб: %ls", w2); wk[i][109] = 0; }
         if (hp[i] > 0) { alive++; int w = text_w(nm[i], font_small); if (w > wname) wname = w;
                          int w3 = wk[i][0] ? text_w(wk[i], font_small) + font_h / 2 : 0; if (w3 > wweak) wweak = w3; }
     }
@@ -1546,7 +1546,8 @@ static void build_menu(void)
         add(L"Сохранить", L"▸");
         add(L"Загрузить", L"▸");
         add(L"Настройки", L"▸");
-        add(L"Журнал: статистика, бестиарий, достижения", L"▸");
+        add(L"Журнал: статистика, достижения, карта", L"▸");
+        add(L"Бестиарий", L"▸");
         add(L"Справка", L"▸");
         add(L"Выйти в главное меню", 0);
         add(m_confirm_quit ? L"Выйти? Нажмите ещё раз" : L"Выход", 0);
@@ -1592,14 +1593,15 @@ static void build_menu(void)
         static wchar_t a[80], b2[80], c[80], d[80], e[80];
         fmt_time(a, 79, ST.play_frames); add(L"Время в игре (всего)", a);
         fmt_time(b2, 79, session_frames); add(L"За этот запуск", b2);
-        { wchar_t t[40]; fmt_time(t, 39, ST.battle_frames); _snwprintf(c, 79, L"%llu, %ls", (unsigned long long)ST.battles, t); }
-        add(L"Боёв (и время в боях)", c);
+        _snwprintf(c, 79, L"%llu", (unsigned long long)ST.battles);
+        add(L"Боёв", c);
+        static wchar_t bt[80]; fmt_time(bt, 79, ST.battle_frames);
+        add(L"Время в боях", bt);
         int m = emu_game_mode_top();
         if (m == 0x0C || m == 0x14) _snwprintf(d, 79, L"%lu", (unsigned long)emu_meseta()); else wcscpy(d, L"—");
         add(L"Месеты сейчас", d);
         _snwprintf(e, 79, L"%llu / %llu", (unsigned long long)ST.saves, (unsigned long long)ST.loads);
         add(L"Быстрых сохранений / загрузок", e);
-        add(L"Бестиарий", L"▸");
         { static wchar_t a2[40]; int got = 0; for (int i = 0; i < NACH; i++) got += ach_time[i] != 0;
           _snwprintf(a2, 39, L"%d из %d  ▸", got, NACH); add(L"Достижения", a2); }
         add(L"Карта мира (клавиша N)", L"▸");
@@ -2132,17 +2134,18 @@ static void menu_act(int dir)
     int i = m_sel;
     logw("menu page %d item %d %s", m_page, i, dir ? (dir < 0 ? "left" : "right") : "select");
     if (m_page == M_MAIN) {
-        if (i != 7) m_confirm_quit = 0;
+        if (i != 8) m_confirm_quit = 0;
         switch (i) {
         case 0: if (!dir) menu_set_open(0); break;
         case 1: case 2:
             if (!dir) { slots_refresh(); m_save_load = i == 2; m_page = M_SAVE; m_sel = m_save_load ? C.slot : C.slot - 1; }
             break;
         case 3: if (!dir) { m_page = M_SET; m_sel = 0; } break;
-        case 4: if (!dir) { m_page = M_STATS; m_sel = 5; } break;
-        case 5: if (!dir) { m_page = M_HELP; m_sel = 0; } break;
-        case 6: if (!dir) { menu_set_open(0); launcher_reopen(); } break;
-        case 7: if (!dir) { if (m_confirm_quit) quit = 1; else m_confirm_quit = 1; } break;
+        case 4: if (!dir) { m_page = M_STATS; m_sel = 6; } break;
+        case 5: if (!dir) { m_page = M_BEST; m_best_page = 0; m_sel = 0; } break;
+        case 6: if (!dir) { m_page = M_HELP; m_sel = 0; } break;
+        case 7: if (!dir) { menu_set_open(0); launcher_reopen(); } break;
+        case 8: if (!dir) { if (m_confirm_quit) quit = 1; else m_confirm_quit = 1; } break;
         }
     } else if (m_page == M_SET) {
         static const int to[6] = { M_VIDEO, M_SOUND, M_SPEED, M_HINTS, M_KEYS, M_PAD };
@@ -2220,9 +2223,8 @@ static void menu_act(int dir)
             set_status(L"назначения сброшены");
         } else { m_sel = m_page == M_KEYS ? 4 : 5; m_page = M_SET; }
     } else if (m_page == M_HELP) {
-        if (!dir) { m_page = M_MAIN; m_sel = 5; }
+        if (!dir) { m_page = M_MAIN; m_sel = 6; }
     } else if (m_page == M_STATS) {
-        if (!dir && i == 5) { m_page = M_BEST; m_best_page = 0; m_sel = 0; }
         if (!dir && i == 6) { m_page = M_ACH; m_sel = NACH; }
         if (!dir && i == 7) { menu_set_open(0); world_open = 1; }
         if (!dir && i == 8) { m_page = M_GOAL; m_sel = 0; }
@@ -2233,16 +2235,16 @@ static void menu_act(int dir)
         if (!dir && i == NACH) { m_page = M_STATS; m_sel = 6; }
     } else if (m_page == M_BEST) {
         if (dir || i == m_best_next) { if (m_best_next < 0) return; m_best_page += dir < 0 ? -1 : 1; if (m_best_page < 0) m_best_page = 0; build_menu(); if (m_sel >= nitems) m_sel = nitems - 1; }
-        else if (!dir && i == nitems - 1) { m_page = M_STATS; m_sel = 5; }
+        else if (!dir && i == nitems - 1) { m_page = M_MAIN; m_sel = 5; }
         else if (!dir && i < 10 && (m_best_next < 0 ? i < nitems - 1 : i < m_best_next)) {   /* details of one monster */
             best_info_t b;
             if (emu_bestiary(m_best_ids[i], &b)) {
-                wchar_t nm[48], t[200]; MultiByteToWideChar(65001, 0, b.name, -1, nm, 48);
-                wchar_t wk[100], rs[130];
-                MultiByteToWideChar(65001, 0, b.weak, -1, wk, 100); MultiByteToWideChar(65001, 0, b.resist, -1, rs, 130);
-                _snwprintf(t, 199, L"%ls%ls: атака %d, защита %d, ловкость %d%ls%ls%ls%ls", nm, b.machine ? L" (механизм)" : L"",
+                wchar_t nm[48], t[400]; MultiByteToWideChar(65001, 0, b.name, -1, nm, 48);
+                wchar_t wk[260], rs[400];
+                MultiByteToWideChar(65001, 0, b.weak, -1, wk, 260); MultiByteToWideChar(65001, 0, b.resist, -1, rs, 400);
+                _snwprintf(t, 399, L"%ls%ls: атака %d, защита %d, ловкость %d%ls%ls%ls%ls", nm, b.machine ? L" (механизм)" : L"",
                            b.attack, b.defence, b.agility, wk[0] ? L"; слаб: " : L"", wk, rs[0] ? L"; устойчив: " : L"", rs);
-                t[199] = 0; set_status(t);
+                t[399] = 0; set_status(t);
             }
         }
     } else if (m_page == M_SAVE) {
@@ -2275,7 +2277,7 @@ static void menu_back(void)
     if (m_wait_bind >= 0) { m_wait_bind = -1; return; }
     if (m_page == M_MAIN) menu_set_open(0);
     else if (m_page == M_HD) { m_page = M_VIDEO; m_sel = 11; }
-    else if (m_page == M_BEST) { m_page = M_STATS; m_sel = 5; }
+    else if (m_page == M_BEST) { m_page = M_MAIN; m_sel = 5; }
     else if (m_page == M_ACH) { m_page = M_STATS; m_sel = 6; }
     else if (m_page == M_GOAL) { m_page = M_STATS; m_sel = 8; }
     else if (m_page == M_VIDEO || m_page == M_SOUND || m_page == M_SPEED || m_page == M_HINTS || m_page == M_KEYS || m_page == M_PAD) {
@@ -2283,7 +2285,7 @@ static void menu_back(void)
         m_sel = from == M_VIDEO ? 0 : from == M_SOUND ? 1 : from == M_SPEED ? 2 : from == M_HINTS ? 3 : from == M_KEYS ? 4 : 5;
     }
     else { int from = m_page; m_page = M_MAIN;
-           m_sel = from == M_SET ? 3 : from == M_SAVE ? (m_save_load ? 2 : 1) : from == M_STATS ? 4 : 5; }
+           m_sel = from == M_SET ? 3 : from == M_SAVE ? (m_save_load ? 2 : 1) : from == M_STATS ? 4 : 6; }
 }
 
 /* keyboard in the menu */

@@ -103,6 +103,7 @@ int bestiary_info(int id, best_info_t *b)
     int kw = 0, kr = 0;
     for (size_t i = 0; i < sizeof el / sizeof el[0]; i++) {
         int v = e[12 + el[i].idx];
+        if (kw >= (int)sizeof b->weak - 1 || kr >= (int)sizeof b->resist - 1) break;   /* full (snprintf returns what it wanted to write) */
         if (v >= 3) kw += snprintf(b->weak + kw, sizeof b->weak - kw, "%s%s%s", kw ? ", " : "", el[i].name, v >= 4 ? " (очень)" : "");
         else if (v <= 1 && el[i].idx != 12) kr +=   /* "святость" leaves most monsters cold: only its weakness is news */ snprintf(b->resist + kr, sizeof b->resist - kr, "%s%s%s", kr ? ", " : "", el[i].name, v == 0 ? " (не берёт)" : "");
     }
