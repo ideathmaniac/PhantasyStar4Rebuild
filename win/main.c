@@ -26,7 +26,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.42"
+#define APP_VERSION_W L"v0.43"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -1022,6 +1022,17 @@ static void draw_status(void);
 static int menu_rect[4], status_rect[4], tip_rect[4], ach_rect[4], hp_rect[4], mm_rect[4];   /* x, y, w, h of overlay boxes drawn this frame */
 static int party_rect[5][4], quick_rect[4], qtip_rect[4], quick_bottom;
 static int g_mouse_x = -1, g_mouse_y = -1;
+static int party_col_right, party_col_bottom;   /* the party panel and quick bar of the last frame (0 when not shown) */
+/* boxes at the top left move right of the party panel when they would cover it */
+static void avoid_party(int *bx, int *bw, int by, int bh, int right_limit)
+{
+    if (!party_col_right || by > party_col_bottom || by + bh < 0) return;
+    if (*bx >= party_col_right) return;
+    int x = party_col_right, w = *bw;
+    if (x + w > right_limit) w = right_limit - x;
+    if (w < *bw / 2) return;   /* no room: rather cover it than squeeze the text */
+    *bx = x; *bw = w;
+}
 /* every overlay box of this frame, for copying over the picture */
 static int overlay_rects(int **r)
 {
@@ -1131,6 +1142,11 @@ static void present(void)
 
     /* overlays are drawn with GDI into the back buffer, then copied */
     menu_rect[2] = status_rect[2] = tip_rect[2] = ach_rect[2] = hp_rect[2] = mm_rect[2] = 0;
+    party_col_right = party_col_bottom = 0;
+    for (int k = 0; k < 5; k++) { if (party_rect[k][2]) { int r = party_rect[k][0] + party_rect[k][2] + font_h / 2, b = party_rect[k][1] + party_rect[k][3];
+        if (r > party_col_right) party_col_right = r; if (b > party_col_bottom) party_col_bottom = b; } }
+    if (quick_rect[2]) { int r = quick_rect[0] + quick_rect[2] + font_h / 2, b = quick_rect[1] + quick_rect[3];
+        if (r > party_col_right) party_col_right = r; if (b > party_col_bottom) party_col_bottom = b; }
     for (int k = 0; k < 5; k++) party_rect[k][2] = 0;
     quick_rect[2] = 0; qtip_rect[2] = 0; quick_bottom = 0;
     if (launcher_open) draw_launcher(cw, ch);
@@ -1348,6 +1364,7 @@ static void draw_tip(int px, int py, int pw, int ph)
     if (need > bw) bw = need < pw ? need : pw;
     int bx = px + (pw - bw) / 2;
     int by = emu_in_battle() ? py + ph / 40 : py + ph - bh - ph / 40;
+    avoid_party(&bx, &bw, by, bh, px + pw);
     fill(bx, by, bw, bh, RGBC(200, 205, 220));
     fill(bx + 2, by + 2, bw - 4, bh - 4, RGBC(10, 30, 96));
     int ty = by + pad;
@@ -1418,6 +1435,7 @@ static void draw_shop(int px, int py, int pw, int ph)
     for (int i = 0; i < nr; i++) if (text_w(rows[i], font_small) + pad * 2 > need) need = text_w(rows[i], font_small) + pad * 2;
     if (need > bw) bw = need < pw ? need : pw;
     int bx = px + (pw - bw) / 2, by = s.battle ? py + ph / 40 : py + ph - bh - ph / 40;   /* the battle list is low on screen */
+    avoid_party(&bx, &bw, by, bh, px + pw);
     fill(bx, by, bw, bh, RGBC(200, 205, 220));
     fill(bx + 2, by + 2, bw - 4, bh - 4, RGBC(10, 30, 96));
     int ty = by + pad;
@@ -1619,25 +1637,53 @@ static int quickbar_hit(int mx, int my)
 }
 static void quickbar_act(int k);
 
+/* the elements a monster is weak to, as icons (from the bestiary's text:
+ * "огонь, лёд (очень)") */
+static int weak_icons(const char *weak, int *ic, int *strong, int max)
+{
+    static const struct { const char *name; int icon; } EL[8] = {
+        { "ветер", IC_WIND }, { "энергия", IC_ENERGY }, { "огонь", IC_FIRE }, { "гравитация", IC_GRAVITY },
+        { "лёд", IC_ICE }, { "свет", IC_LIGHT }, { "гром", IC_THUNDER }, { "святость", IC_HOLY } };
+    int n = 0;
+    const char *p = weak;
+    while (p && *p && n < max) {
+        while (*p == ',' || *p == ' ') p++;
+        for (int e = 0; e < 8; e++) {
+            size_t l = strlen(EL[e].name);
+            if (!strncmp(p, EL[e].name, l)) {
+                ic[n] = EL[e].icon;
+                strong[n] = !strncmp(p + l, " (очень)", strlen(" (очень)"));
+                n++; break;
+            }
+        }
+        p = strchr(p, ',');
+    }
+    return n;
+}
+
+/* monsters' HP in battle, top right: an icon (a gear for machines), the
+ * name, the bar with numbers and the elements it is weak to as icons
+ * (a gold frame: very weak) */
 static void draw_enemy_hp(int px, int py, int pw, int ph)
 {
     (void)ph;
     int ids[8], hp[8], mx[8];
     int n = bestiary_battle(ids, hp, mx, 8);
     if (n <= 0) return;
-    wchar_t nm[8][48], wk[8][110]; int alive = 0, wname = 0, wweak = 0;
+    wchar_t nm[8][48]; int alive = 0, wname = 0, nweak[8], wic[8][8], wst[8][8], mach[8], maxweak = 0;
     for (int i = 0; i < n; i++) {
         best_info_t b;
         if (!emu_bestiary(ids[i], &b)) return;
         MultiByteToWideChar(65001, 0, b.name, -1, nm[i], 48);
-        wk[i][0] = 0;
-        if (b.weak[0]) { wchar_t w2[260]; MultiByteToWideChar(65001, 0, b.weak, -1, w2, 260); _snwprintf(wk[i], 109, L"слаб: %ls", w2); wk[i][109] = 0; }
-        if (hp[i] > 0) { alive++; int w = text_w(nm[i], font_small); if (w > wname) wname = w;
-                         int w3 = wk[i][0] ? text_w(wk[i], font_small) + font_h / 2 : 0; if (w3 > wweak) wweak = w3; }
+        nweak[i] = weak_icons(b.weak, wic[i], wst[i], 8);
+        mach[i] = b.machine;
+        if (hp[i] > 0) { alive++; int w = text_w(nm[i], font_small); if (w > wname) wname = w; if (nweak[i] > maxweak) maxweak = nweak[i]; }
     }
     if (!alive) return;
-    int lh = font_h, pad = font_h / 3, barw = font_h * 4, numw = text_w(L"0000/0000", font_small);
-    int bw = pad * 3 + wname + font_h / 2 + barw + font_h / 2 + numw + wweak, bh = alive * lh + pad * 2;
+    int lh = font_h * 6 / 5, pad = font_h / 3, barw = font_h * 4, numw = text_w(L"0000/0000", font_small);
+    int isz = font_h * 9 / 10, ist = isz + font_h / 4;
+    int ww = maxweak ? font_h / 2 + maxweak * ist : 0;
+    int bw = pad * 3 + ist + wname + font_h / 2 + barw + font_h / 2 + numw + ww, bh = alive * lh + pad * 2;
     int bx = px + pw - bw - font_h / 3, by = py + font_h / 3;
     fill(bx, by, bw, bh, RGBC(150, 160, 200));
     fill(bx + 1, by + 1, bw - 2, bh - 2, RGBC(10, 20, 60));
@@ -1645,15 +1691,22 @@ static void draw_enemy_hp(int px, int py, int pw, int ph)
     for (int i = 0; i < n; i++) {
         if (hp[i] <= 0) continue;
         int m = mx[i] > 0 ? mx[i] : hp[i];
-        draw_text(bx + pad, ty, nm[i], RGBC(230, 230, 255), font_small);
-        int x = bx + pad * 2 + wname + font_h / 2, yb = ty + lh / 3, hb = lh / 3;
+        int iy = ty + (lh - isz) / 2 - 1;
+        draw_icon(bx + pad, iy, isz, mach[i] ? IC_GEAR : IC_SKULL, 0);
+        draw_text(bx + pad + ist, ty, nm[i], RGBC(230, 230, 255), font_small);
+        int x = bx + pad * 2 + ist + wname + font_h / 2, yb = ty + lh / 3, hb = lh / 3;
         int f = m ? barw * (hp[i] > m ? m : hp[i]) / m : 0;
         DWORD col = hp[i] * 4 <= m ? RGBC(240, 80, 70) : hp[i] * 2 <= m ? RGBC(240, 200, 70) : RGBC(90, 220, 110);
         fill(x, yb, barw, hb, RGBC(40, 40, 70));
         if (f > 0) fill(x, yb, f, hb, col);
         wchar_t t[24]; _snwprintf(t, 23, L"%d/%d", hp[i], m); t[23] = 0;
         draw_text(x + barw + font_h / 2, ty, t, RGBC(200, 210, 240), font_small);
-        if (wk[i][0]) draw_text(x + barw + font_h / 2 + numw + font_h / 2, ty, wk[i], RGBC(140, 255, 150), font_small);
+        int wx = x + barw + font_h / 2 + numw + font_h / 2;
+        for (int k = 0; k < nweak[i]; k++) {
+            if (wst[i][k]) fill(wx + k * ist - 2, iy - 2, isz + 4, isz + 4, RGBC(214, 176, 92));
+            if (wst[i][k]) fill(wx + k * ist - 1, iy - 1, isz + 2, isz + 2, RGBC(10, 20, 60));
+            draw_icon(wx + k * ist, iy, isz, wic[i][k], 0);
+        }
         ty += lh;
     }
     hp_rect[0] = bx; hp_rect[1] = by; hp_rect[2] = bw; hp_rect[3] = bh;
@@ -3036,9 +3089,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.42");
+    diag_init(exe_dir, "0.43");
     diag_info = settings_info;
-    logw("start, version 0.42");
+    logw("start, version 0.43");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
