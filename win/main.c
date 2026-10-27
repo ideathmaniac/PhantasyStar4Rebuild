@@ -25,7 +25,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.39"
+#define APP_VERSION_W L"v0.40"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -1591,18 +1591,25 @@ static void fit_window(void)
 /* ======================================================================
  * Overlay menu
  * ====================================================================== */
-enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP, M_HD, M_SAVE, M_STATS, M_BEST, M_ACH, M_SET, M_SOUND, M_HINTS, M_GOAL };
+enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP, M_HD, M_SAVE, M_STATS, M_BEST, M_ACH, M_SET, M_SOUND, M_HINTS, M_GOAL, M_PARTY, M_CHAR };
+static int m_char, m_char_from_panel;   /* the character card: party slot, opened by a click on the party panel */
 static int m_best_page, m_best_next = -1, m_best_ids[10];   /* bestiary page shown; index of the "next page" item */
 static int m_save_load;                     /* M_SAVE lists slots to load (1) or to save into (0) */
 static int m_page, m_sel, m_wait_bind = -1;   /* action index waiting for a key / pad input */
 static int m_confirm_quit;
 
 typedef struct { wchar_t label[80]; wchar_t value[80]; } item_t;
-static item_t items[24];
+static item_t items[64];
 static int nitems;
 static wchar_t m_title[80];
 
-static void add(const wchar_t *l, const wchar_t *v) { wcscpy(items[nitems].label, l); wcscpy(items[nitems].value, v ? v : L""); nitems++; }
+static void add(const wchar_t *l, const wchar_t *v)
+{
+    if (nitems >= 64) return;
+    wcsncpy(items[nitems].label, l, 79); items[nitems].label[79] = 0;
+    wcsncpy(items[nitems].value, v ? v : L"", 79); items[nitems].value[79] = 0;
+    nitems++;
+}
 
 static const wchar_t *onoff(int v) { return v ? L"вкл" : L"выкл"; }
 
@@ -1637,6 +1644,100 @@ static const wchar_t *story_hint(void)
     return L"Академия Пиаты: поговорите с директором, затем спуститесь в подвал.";
 }
 
+
+static void menu_back(void);
+/* the character card (pause menu → Отряд, or a click on the party panel):
+ * stats, equipment, techniques and skills (Enter shows the description),
+ * and what in the bag this character can wear */
+static int m_row_kind[64], m_row_arg[64];   /* 1 technique, 2 skill, 3 item; the id */
+static void build_char_card(void)
+{
+    static wchar_t lab[64][80], val[64][80];
+    int nr = 0;
+#define ROW(kind, arg, ...) do { if (nitems < 63) { m_row_kind[nitems] = kind; m_row_arg[nitems] = arg; \
+        _snwprintf(val[nr], 79, __VA_ARGS__); val[nr][79] = 0; add(lab[nr], val[nr]); nr++; } } while (0)
+    for (int i = 0; i < 64; i++) m_row_kind[i] = 0;
+    const uint8_t *r = emu_work_ram();
+    int m = emu_game_mode_top(), rec = r[0xF40A + (m_char < 5 ? m_char : 0)];
+    if ((m != 0x0C && m != 0x14) || rec > 10) { wcscpy(m_title, L"Отряд"); add(L"Назад", 0); return; }
+    const uint8_t *c = r + 0xF500 + rec * 0x80;
+    wchar_t nm[40]; ui_ps4_name(c, nm, 40);
+    uint32_t exp = (uint32_t)c[10] << 24 | (uint32_t)c[11] << 16 | (uint32_t)c[12] << 8 | c[13];
+    _snwprintf(m_title, 79, L"%ls — уровень %d, опыт %lu", nm, c[8] << 8 | c[9], (unsigned long)exp); m_title[79] = 0;
+    wcscpy(lab[nr], L"ЕЖ / ЕТ");
+    ROW(0, 0, L"%d/%d · %d/%d", (int16_t)(c[14] << 8 | c[15]), c[16] << 8 | c[17], (int16_t)(c[18] << 8 | c[19]), c[20] << 8 | c[21]);
+    wcscpy(lab[nr], L"Атака / защита");
+    ROW(0, 0, L"%d / %d", c[0x24] << 8 | c[0x25], c[0x28] << 8 | c[0x29]);
+    wcscpy(lab[nr], L"Сила · разум · ловкость · меткость");
+    ROW(0, 0, L"%d · %d · %d · %d", c[0x18], c[0x1B], c[0x1E], c[0x21]);
+    static const wchar_t *slot[4] = { L"Правая рука", L"Левая рука", L"Голова", L"Тело" };
+    for (int k = 0; k < 4; k++) {
+        int id = c[0x4C + k];
+        shop_t it; wcscpy(lab[nr], slot[k]);
+        if (id && shop_item(id, &it)) {
+            wchar_t w[48]; MultiByteToWideChar(65001, 0, it.name, -1, w, 48);
+            if (it.atk && it.def) ROW(3, id, L"%ls (атака %d, защита %d)", w, it.atk, it.def);
+            else if (it.atk) ROW(3, id, L"%ls (атака %d)", w, it.atk);
+            else if (it.def) ROW(3, id, L"%ls (защита %d)", w, it.def);
+            else ROW(3, id, L"%ls", w);
+        } else ROW(0, 0, L"—");
+    }
+    /* techniques ($52, 16 ids + 1) and skills ($62, 8 ids + 1, last first) */
+    for (int i = 0; i < 16; i++) {
+        int id = c[0x52 + i]; tip_t t;
+        if (!id || !tips_info(0, id - 1, &t)) continue;
+        MultiByteToWideChar(65001, 0, t.name, -1, lab[nr], 80);
+        if (!nr || m_row_kind[nitems - 1] != 1) { wchar_t h[80]; _snwprintf(h, 79, L"Техники: %ls", lab[nr]); h[79] = 0; wcscpy(lab[nr], h); }
+        ROW(1, id - 1, L"%d ЕТ  ▸", t.cost);
+    }
+    for (int i = 7; i >= 0; i--) {
+        int id = c[0x62 + i]; tip_t t;
+        if (!id || !tips_info(1, id - 1, &t)) continue;
+        MultiByteToWideChar(65001, 0, t.name, -1, lab[nr], 80);
+        if (m_row_kind[nitems - 1] != 2) { wchar_t h[80]; _snwprintf(h, 79, L"Навыки: %ls", lab[nr]); h[79] = 0; wcscpy(lab[nr], h); }
+        ROW(2, id - 1, L"▸");
+    }
+    /* the bag: what this character can wear, and what it would change */
+    int seen[256] = { 0 }, first = 1;
+    for (int i = 0; i < 40; i++) {
+        int id = r[0xF410 + i]; shop_t it;
+        if (!id || seen[id]++ || !shop_item(id, &it) || it.type < 1 || it.type > 7) continue;
+        for (int k = 0; k < it.nrow; k++) {
+            shop_row_t *w = &it.row[k];
+            if (k != m_char || !w->can || w->same) continue;
+            wchar_t nmw[48]; MultiByteToWideChar(65001, 0, it.name, -1, nmw, 48);
+            _snwprintf(lab[nr], 79, first ? L"Можно надеть: %ls" : L"%ls", nmw); lab[nr][79] = 0; first = 0;
+            ROW(3, id, L"атака %+d, защита %+d", w->datk, w->ddef);
+        }
+    }
+    add(L"Назад", 0);
+#undef ROW
+}
+static void char_card_act(int i)
+{
+    if (i < 0 || i >= nitems) return;
+    if (i == nitems - 1) { menu_back(); return; }
+    int k = m_row_kind[i], id = m_row_arg[i];
+    wchar_t t[400]; t[0] = 0;
+    if (k == 1 || k == 2) {
+        tip_t tp;
+        if (!tips_info(k == 2, id, &tp)) return;
+        wchar_t nm[40], d[200]; MultiByteToWideChar(65001, 0, tp.name, -1, nm, 40); MultiByteToWideChar(65001, 0, tp.desc, -1, d, 200);
+        _snwprintf(t, 399, L"%ls: %ls", nm, d);
+    } else if (k == 3) {
+        shop_t it;
+        if (!shop_item(id, &it)) return;
+        wchar_t nm[48], kd[40]; MultiByteToWideChar(65001, 0, it.name, -1, nm, 48); MultiByteToWideChar(65001, 0, it.kind, -1, kd, 40);
+        int n = _snwprintf(t, 399, L"%ls — %ls", nm, kd);
+        for (int r = 0; r < it.nrow && n > 0 && n < 380; r++) {
+            wchar_t who[24]; MultiByteToWideChar(65001, 0, it.row[r].who, -1, who, 24);
+            int a = _snwprintf(t + n, 399 - n, L"; %ls: %ls", who, it.row[r].can ? (it.row[r].same ? L"надето" : L"может") : L"нет");
+            if (a > 0) n += a;
+        }
+    } else return;
+    t[399] = 0; set_status(t);
+}
+
 static void build_menu(void)
 {
     nitems = 0;
@@ -1648,6 +1749,7 @@ static void build_menu(void)
         add(L"Сохранить", L"▸");
         add(L"Загрузить", L"▸");
         add(L"Настройки", L"▸");
+        add(L"Отряд: снаряжение, техники, характеристики", L"▸");
         add(L"Журнал: статистика, достижения, карта", L"▸");
         add(L"Бестиарий", L"▸");
         add(L"Справка", L"▸");
@@ -1710,6 +1812,24 @@ static void build_menu(void)
         add(L"Куда идти дальше", L"▸");
         add(L"Назад", 0);
         break; }
+    case M_PARTY: {
+        wcscpy(m_title, L"Отряд");
+        const uint8_t *r = emu_work_ram();
+        int m = emu_game_mode_top(), n = 0;
+        static wchar_t lab[5][40], val[5][60];
+        for (int k = 0; k < 5 && (m == 0x0C || m == 0x14); k++) {
+            int rec = r[0xF40A + k];
+            if (rec == 0xFF || rec > 10) break;
+            const uint8_t *c = r + 0xF500 + rec * 0x80;
+            ui_ps4_name(c, lab[k], 40);
+            _snwprintf(val[k], 59, L"ур. %d · ЕЖ %d/%d · ЕТ %d/%d  ▸", c[8] << 8 | c[9], (int16_t)(c[14] << 8 | c[15]), c[16] << 8 | c[17],
+                       (int16_t)(c[18] << 8 | c[19]), c[20] << 8 | c[21]); val[k][59] = 0;
+            add(lab[k], val[k]); n++;
+        }
+        if (!n) add(L"Отряд появится, когда вы будете в игре.", 0);
+        add(L"Назад", 0);
+        break; }
+    case M_CHAR: build_char_card(); break;
     case M_GOAL: {
         wcscpy(m_title, L"Куда идти дальше");
         static wchar_t rows[12][80];
@@ -1880,7 +2000,7 @@ static void build_menu(void)
     }
 }
 
-static int item_y[32], item_h, item_first, item_count, item_x0, item_x1;
+static int item_y[64], item_h, item_first, item_count, item_x0, item_x1;
 /* ======================================================================
  * Launcher: the first screen (Continue, Load, New game, Settings, Exit)
  * ====================================================================== */
@@ -2210,7 +2330,7 @@ static void draw_menu(void)
     int first = 0, rows = (ph - lh * 2) / lh;
     if (m_sel >= rows) first = m_sel - rows + 1;
     item_first = first;
-    for (int i = first; i < nitems && i - first < rows; i++) {
+    for (int i = first; i < nitems && i - first < rows && item_count < 64; i++) {
         int yy = py + lh * 2 + (i - first) * lh;
         item_y[item_count++] = yy;
         if (i == m_sel) fill(px + font_h / 2, yy - 2, lw - font_h, lh, RGBC(60, 90, 170));
@@ -2224,7 +2344,7 @@ static void draw_menu(void)
 
 static void menu_set_open(int o)
 {
-    menu_open = o; m_page = M_MAIN; m_sel = 0; m_wait_bind = -1; m_confirm_quit = 0;
+    menu_open = o; m_page = M_MAIN; m_sel = 0; m_wait_bind = -1; m_confirm_quit = 0; m_char_from_panel = 0;
     if (!o) cfg_save();
 }
 
@@ -2237,18 +2357,19 @@ static void menu_act(int dir)
     int i = m_sel;
     logw("menu page %d item %d %s", m_page, i, dir ? (dir < 0 ? "left" : "right") : "select");
     if (m_page == M_MAIN) {
-        if (i != 8) m_confirm_quit = 0;
+        if (i != 9) m_confirm_quit = 0;
         switch (i) {
         case 0: if (!dir) menu_set_open(0); break;
         case 1: case 2:
             if (!dir) { slots_refresh(); m_save_load = i == 2; m_page = M_SAVE; m_sel = m_save_load ? C.slot : C.slot - 1; }
             break;
         case 3: if (!dir) { m_page = M_SET; m_sel = 0; } break;
-        case 4: if (!dir) { m_page = M_STATS; m_sel = 6; } break;
-        case 5: if (!dir) { m_page = M_BEST; m_best_page = 0; m_sel = 0; } break;
-        case 6: if (!dir) { m_page = M_HELP; m_sel = 0; } break;
-        case 7: if (!dir) { menu_set_open(0); launcher_reopen(); } break;
-        case 8: if (!dir) { if (m_confirm_quit) quit = 1; else m_confirm_quit = 1; } break;
+        case 4: if (!dir) { m_page = M_PARTY; m_sel = 0; } break;
+        case 5: if (!dir) { m_page = M_STATS; m_sel = 6; } break;
+        case 6: if (!dir) { m_page = M_BEST; m_best_page = 0; m_sel = 0; } break;
+        case 7: if (!dir) { m_page = M_HELP; m_sel = 0; } break;
+        case 8: if (!dir) { menu_set_open(0); launcher_reopen(); } break;
+        case 9: if (!dir) { if (m_confirm_quit) quit = 1; else m_confirm_quit = 1; } break;
         }
     } else if (m_page == M_SET) {
         static const int to[6] = { M_VIDEO, M_SOUND, M_SPEED, M_HINTS, M_KEYS, M_PAD };
@@ -2327,19 +2448,23 @@ static void menu_act(int dir)
             set_status(L"назначения сброшены");
         } else { m_sel = m_page == M_KEYS ? 4 : 5; m_page = M_SET; }
     } else if (m_page == M_HELP) {
-        if (!dir) { m_page = M_MAIN; m_sel = 6; }
+        if (!dir) { m_page = M_MAIN; m_sel = 7; }
     } else if (m_page == M_STATS) {
         if (!dir && i == 6) { m_page = M_ACH; m_sel = NACH; }
         if (!dir && i == 7) { menu_set_open(0); world_open = 1; }
         if (!dir && i == 8) { m_page = M_GOAL; m_sel = 0; }
-        if (!dir && i == 9) { m_page = M_MAIN; m_sel = 4; }
+        if (!dir && i == 9) { m_page = M_MAIN; m_sel = 5; }
+    } else if (m_page == M_PARTY) {
+        if (!dir) { if (i == nitems - 1) { m_page = M_MAIN; m_sel = 4; } else { m_char = i; m_char_from_panel = 0; m_page = M_CHAR; m_sel = 0; } }
+    } else if (m_page == M_CHAR) {
+        if (!dir) char_card_act(i);
     } else if (m_page == M_GOAL) {
         if (!dir) { m_page = M_STATS; m_sel = 8; }
     } else if (m_page == M_ACH) {
         if (!dir && i == NACH) { m_page = M_STATS; m_sel = 6; }
     } else if (m_page == M_BEST) {
         if (dir || i == m_best_next) { if (m_best_next < 0) return; m_best_page += dir < 0 ? -1 : 1; if (m_best_page < 0) m_best_page = 0; build_menu(); if (m_sel >= nitems) m_sel = nitems - 1; }
-        else if (!dir && i == nitems - 1) { m_page = M_MAIN; m_sel = 5; }
+        else if (!dir && i == nitems - 1) { m_page = M_MAIN; m_sel = 6; }
         else if (!dir && i < 10 && (m_best_next < 0 ? i < nitems - 1 : i < m_best_next)) {   /* details of one monster */
             best_info_t b;
             if (emu_bestiary(m_best_ids[i], &b)) {
@@ -2381,7 +2506,9 @@ static void menu_back(void)
     if (m_wait_bind >= 0) { m_wait_bind = -1; return; }
     if (m_page == M_MAIN) menu_set_open(0);
     else if (m_page == M_HD) { m_page = M_VIDEO; m_sel = 11; }
-    else if (m_page == M_BEST) { m_page = M_MAIN; m_sel = 5; }
+    else if (m_page == M_BEST) { m_page = M_MAIN; m_sel = 6; }
+    else if (m_page == M_PARTY) { m_page = M_MAIN; m_sel = 4; }
+    else if (m_page == M_CHAR) { if (m_char_from_panel) menu_set_open(0); else { m_page = M_PARTY; m_sel = m_char; } }
     else if (m_page == M_ACH) { m_page = M_STATS; m_sel = 6; }
     else if (m_page == M_GOAL) { m_page = M_STATS; m_sel = 8; }
     else if (m_page == M_VIDEO || m_page == M_SOUND || m_page == M_SPEED || m_page == M_HINTS || m_page == M_KEYS || m_page == M_PAD) {
@@ -2389,7 +2516,7 @@ static void menu_back(void)
         m_sel = from == M_VIDEO ? 0 : from == M_SOUND ? 1 : from == M_SPEED ? 2 : from == M_HINTS ? 3 : from == M_KEYS ? 4 : 5;
     }
     else { int from = m_page; m_page = M_MAIN;
-           m_sel = from == M_SET ? 3 : from == M_SAVE ? (m_save_load ? 2 : 1) : from == M_STATS ? 4 : 6; }
+           m_sel = from == M_SET ? 3 : from == M_SAVE ? (m_save_load ? 2 : 1) : from == M_STATS ? 5 : 7; }
 }
 
 /* keyboard in the menu */
@@ -2643,6 +2770,13 @@ static LRESULT wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_LBUTTONDOWN:
         if (menu_open && m_wait_bind < 0) { int i = menu_hit(mx, my); if (i >= 0) { m_sel = i; menu_act(0); } }
         else if (launcher_open) { int k = launcher_hit(mx, my); if (k >= 0 && (l_page || l_enabled(k))) launcher_act(k); }
+        else if (!world_open)
+            for (int k = 0; k < 5; k++) {   /* a portrait of the party panel: that character's card */
+                int *pr = party_rect[k];
+                if (pr[2] > 0 && mx >= pr[0] && mx < pr[0] + pr[2] && my >= pr[1] && my < pr[1] + pr[3]) {
+                    menu_set_open(1); m_page = M_CHAR; m_char = k; m_char_from_panel = 1; m_sel = 0; break;
+                }
+            }
         return 0;
     case WM_RBUTTONDOWN:
         if (menu_open) menu_back(); else if (launcher_open) launcher_back(); else menu_set_open(1);
@@ -2737,9 +2871,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.39");
+    diag_init(exe_dir, "0.40");
     diag_info = settings_info;
-    logw("start, version 0.39");
+    logw("start, version 0.40");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {

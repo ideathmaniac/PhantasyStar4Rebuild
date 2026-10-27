@@ -215,6 +215,13 @@ static int describe(shop_t *s, int id, int priced)
     return 1;
 }
 
+/* any item, with the comparison rows for the party (price -1) */
+int shop_item(int id, shop_t *s)
+{
+    if (id < 1 || id > NITEMS) return 0;
+    return describe(s, id, 0);
+}
+
 /* the field menu's inventory list: window handler $05B4B2, page $FFE206
  * (8 items each), cursor $FFEC9F, items $FFF410 */
 int shop_inventory(shop_t *s)

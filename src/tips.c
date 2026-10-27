@@ -317,6 +317,9 @@ static int fill(tip_t *t, int skill, int id /* 0-based within its kind */)
 
 static uint16_t rw(uint32_t a) { return (uint16_t)(g_ram[a & 0xFFFF] << 8 | g_ram[(a + 1) & 0xFFFF]); }
 
+/* any technique (skill 0) or skill (1), id 0-based within its kind, outside the game's lists */
+int tips_info(int skill, int id, tip_t *t) { nchosen = 0; return fill(t, skill, id); }
+
 int tips_current(tip_t *t)
 {
     uint16_t mode = rw(0xEF00);

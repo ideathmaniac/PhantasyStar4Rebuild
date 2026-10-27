@@ -26,5 +26,7 @@ int shop_current(shop_t *s);
 int shop_inventory(shop_t *s);
 /* 1 and *s filled (no comparison rows) while the battle item list is open */
 int shop_battle_item(shop_t *s);
+/* any item by id (comparison rows for the current party) */
+int shop_item(int id, shop_t *s);
 
 #endif

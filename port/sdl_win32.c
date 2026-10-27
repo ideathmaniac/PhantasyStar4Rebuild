@@ -771,17 +771,35 @@ static int quit_posted;
 static void drawable_full(int *w, int *h) { if (ren) SDL_GetRendererOutputSize(ren, w, h); else SDL_GL_GetDrawableSize(win, w, h); }
 #define drawable drawable_full
 static int touch_event(const SDL_Event *e);
-/* PS4_KEYS="ms:vk,ms:vk,..." (vk in hex): scripted key presses, for tests */
+/* PS4_KEYS="ms:vk[:hold],..." (vk in hex, hold in ms, default 0): scripted
+ * key presses, for tests */
 static void scripted_keys(void)
 {
-    static const char *p; static int init; static Uint64 t0;
+    static const char *p; static int init; static Uint64 t0, up_at[16]; static int up_vk[16], nup;
     if (!init) { init = 1; p = getenv("PS4_KEYS"); t0 = SDL_GetTicks64(); }
+    Uint64 now = SDL_GetTicks64() - t0;
+    for (int i = 0; i < nup; i++) if (now >= up_at[i]) { post(WM_KEYUP, (WPARAM)up_vk[i], 0); up_at[i] = up_at[--nup]; up_vk[i] = up_vk[nup]; i--; }
     while (p && *p) {
-        unsigned ms, vk; int n = 0;
+        unsigned ms, vk, hold = 0; int n = 0;
         if (sscanf(p, "%u:%x%n", &ms, &vk, &n) != 2) { p = 0; break; }
-        if (SDL_GetTicks64() - t0 < ms) break;
-        post(WM_KEYDOWN, vk, 0); post(WM_KEYUP, vk, 0);
-        p += n; if (*p == ',') p++;
+        if (now < ms) break;
+        p += n;
+        if (*p == ':') { int m = 0; sscanf(p + 1, "%u%n", &hold, &m); p += 1 + m; }
+        post(WM_KEYDOWN, vk, 0);
+        if (hold && nup < 16) { up_at[nup] = now + hold; up_vk[nup++] = (int)vk; }
+        else post(WM_KEYUP, vk, 0);
+        if (*p == ',') p++;
+    }
+    /* PS4_CLICK="ms:x:y,...": mouse clicks in drawable pixels */
+    static const char *c; static int cinit;
+    if (!cinit) { cinit = 1; c = getenv("PS4_CLICK"); }
+    while (c && *c) {
+        unsigned ms; int x, y, n = 0;
+        if (sscanf(c, "%u:%d:%d%n", &ms, &x, &y, &n) != 3) { c = 0; break; }
+        if (now < ms) break;
+        LPARAM l = (LPARAM)((x & 0xFFFF) | ((y & 0xFFFF) << 16));
+        post(WM_MOUSEMOVE, 0, l); post(WM_LBUTTONDOWN, 0, l);
+        c += n; if (*c == ',') c++;
     }
 }
 static void pump(void)
@@ -931,7 +949,7 @@ static void touch_layout(int W, int H)
         /* the small ones at the edges, clear of the game's windows at the bottom */
         tb[TB_TURBO] = (tbtn_t){ W - m - rs * 1.4f, tb[TB_C].y - rb - mm(9), rs, "ТУРБО" };
         tb[TB_START] = (tbtn_t){ W - m - rs * 1.4f, tb[TB_TURBO].y - rs * 3.4f, rs, "START" };
-        tb[TB_MENU]  = (tbtn_t){ m + rs * 1.4f, m + rs * 0.9f, rs, "МЕНЮ" };
+        tb[TB_MENU]  = (tbtn_t){ W - m - rs * 1.4f, tb[TB_START].y - rs * 3.4f, rs, "МЕНЮ" };   /* the top left is the party panel */
     }
 }
 /* d-pad bits from a point (8 directions, a dead zone in the middle) */

@@ -17,5 +17,7 @@ typedef struct tip_s {
 
 /* 1 and *t filled while a technique or skill list is open (known ROM only) */
 int tips_current(tip_t *t);
+/* the description of one technique (skill 0) or skill (1), id 0-based */
+int tips_info(int skill, int id, tip_t *t);
 
 #endif
