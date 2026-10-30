@@ -52,7 +52,11 @@ You need your own ROM; the program asks for it on the first start.
   the other half is already ordered this round), enemy HP bars, monster weaknesses.
 - Inventory and battle item hints, faster text, adjustable walking speed, encounter rate,
   experience and meseta multipliers; music keeps its tempo during speed-ups.
-- Minimap with fog of war, a world map screen (N) and a "where to go next" page.
+- Minimap with fog of war; a world map screen (N) with the whole planet read from the
+  game's map pieces in the ROM, zoom, town names from the game's place table and the
+  goal of the "where to go next" page.
+- Battle turn order panel (the game's initiative table at $FFEFB0; the likely order by
+  agility while orders are given).
 - Launcher with the title logo, continue / load pages and save previews.
 - Linux / Steam Deck and Android: the same front end over a small Win32-on-SDL2 layer
   (`port/`); on Android an on-screen retro pad sized in millimetres (on squarish screens

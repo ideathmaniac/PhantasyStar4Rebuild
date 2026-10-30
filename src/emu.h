@@ -58,7 +58,8 @@ const uint8_t *emu_work_ram(void);
  * 0 off the field, 1 the field under windows, 2 the field alone */
 int emu_minimap(uint32_t *out, int w, int h, int *mx, int *my);
 /* the world map explored so far (one pixel per 8x8 tile) while on a planet's map; 0 elsewhere */
-int emu_world_image(uint32_t *out, int maxw, int maxh, int *w, int *h, int *px, int *py);
+int emu_world_image(uint32_t *out, int maxw, int maxh, int *w, int *h, int *px, int *py);   /* planet number + 1; px < 0: party elsewhere */
+int emu_world_towns(int world, int *place, int *tx, int *ty, int max);   /* towns on that planet (tiles), place = the game's place number */
 uint8_t *emu_world_data(int *size);   /* to keep in a file */
 void emu_set_fog(int on);              /* minimap shows only the blocks seen so far */
 uint8_t *emu_fog_data(int *size);      /* the seen blocks of every map, to keep in a file */   /* the 64 KB work RAM ($FF0000) */

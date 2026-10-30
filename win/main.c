@@ -27,7 +27,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.44"
+#define APP_VERSION_W L"v0.45"
 #define APP_TITLE L"Phantasy Star IV — Звезда Фантазии"
 
 /* ======================================================================
@@ -1047,7 +1047,7 @@ static void draw_icon(int x0, int y0, int size, int id, int dim)
 static void draw_menu(void);
 static void draw_status(void);
 static int menu_rect[4], status_rect[4], tip_rect[4], ach_rect[4], hp_rect[4], mm_rect[4];   /* x, y, w, h of overlay boxes drawn this frame */
-static int party_rect[5][4], quick_rect[4], qtip_rect[4], fps_rect[4], quick_bottom;
+static int party_rect[5][4], quick_rect[4], qtip_rect[4], fps_rect[4], turn_rect[4], hptip_rect[4], quick_bottom;
 static void draw_fps(void);
 static int g_mouse_x = -1, g_mouse_y = -1;
 static int party_col_right, party_col_bottom;   /* the party panel and quick bar of the last frame (0 when not shown) */
@@ -1067,11 +1067,11 @@ static int overlay_rects(int **r)
     int n = 0;
     r[n++] = menu_rect; r[n++] = status_rect; r[n++] = tip_rect; r[n++] = ach_rect; r[n++] = hp_rect; r[n++] = mm_rect;
     for (int k = 0; k < 5; k++) r[n++] = party_rect[k];
-    r[n++] = quick_rect; r[n++] = qtip_rect; r[n++] = fps_rect;
+    r[n++] = quick_rect; r[n++] = qtip_rect; r[n++] = fps_rect; r[n++] = turn_rect; r[n++] = hptip_rect;
     return n;
 }
 static void draw_party(int px, int py, int pw, int ph);
-static void draw_quickbar(int py);
+static void draw_quickbar(int py, int ph);
 static void draw_tip(int px, int py, int pw, int ph);
 static void draw_shop(int px, int py, int pw, int ph);
 static void draw_enemy_hp(int px, int py, int pw, int ph);
@@ -1176,7 +1176,9 @@ static void present(void)
     if (quick_rect[2]) { int r = quick_rect[0] + quick_rect[2] + font_h / 2, b = quick_rect[1] + quick_rect[3];
         if (r > party_col_right) party_col_right = r; if (b > party_col_bottom) party_col_bottom = b; }
     for (int k = 0; k < 5; k++) party_rect[k][2] = 0;
-    quick_rect[2] = 0; qtip_rect[2] = 0; quick_bottom = 0; fps_rect[2] = 0;
+    if (turn_rect[2]) { int r = turn_rect[0] + turn_rect[2] + font_h / 2, b = turn_rect[1] + turn_rect[3];
+        if (r > party_col_right) party_col_right = r; if (b > party_col_bottom) party_col_bottom = b; }
+    quick_rect[2] = 0; qtip_rect[2] = 0; quick_bottom = 0; fps_rect[2] = 0; turn_rect[2] = 0; hptip_rect[2] = 0;
     if (launcher_open) draw_launcher(cw, ch);
     else if (world_open && !menu_open) draw_world(cw, ch);
     else if (!menu_open) {
@@ -1185,7 +1187,7 @@ static void present(void)
         if (C.enemy_hp && !tip_rect[2]) draw_enemy_hp(x, y, w, h);   /* the technique panel uses the top in battle */
         if (C.minimap && !tip_rect[2]) draw_minimap(x, y, w, h);
         if (C.party_hud) draw_party(x, y, w, h);
-        if (C.quickbar) draw_quickbar(y);
+        if (C.quickbar) draw_quickbar(y, h);
     }
     if (!launcher_open) draw_ach_toast();
     if (!launcher_open) draw_fps();
@@ -1241,7 +1243,7 @@ static void present(void)
     }
     if (d3d_ok) {
         d3d_frame(pic, PW, PH, ppitch, x, y, w, h, cw, ch, cine_on ? FX_CINE : C.fx_mode, C.smooth, cine_on || C.fx_dither, C.backdrop);
-        int *rects[16]; int nrects = overlay_rects(rects);
+        int *rects[32]; int nrects = overlay_rects(rects);
         if (cw <= back_w && ch <= back_h)
             for (int k = 0; k < nrects; k++) {
                 int *r = rects[k];
@@ -1280,7 +1282,7 @@ static void present(void)
             glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, W, H, GL_BGRA_EXT, GL_UNSIGNED_BYTE, fb);
             gl_quad(tex_frame, 512, 256, 0, 0, W, H, x, y, w, h, C.smooth);
         }
-        int *rects[16]; int nrects = overlay_rects(rects);
+        int *rects[32]; int nrects = overlay_rects(rects);
         /* an overlay box is uploaded again only when it changed: the party
          * panel and the quick bar are on screen all the time, and on phones
          * every texture upload can stall the GPU */
@@ -1328,7 +1330,7 @@ static void present(void)
     if (C.smooth) SetBrushOrgEx(dc, 0, 0, 0);
     if (cpu_hd) StretchDIBits(dc, x, y, w, h, 0, 0, W * 4, H * 4, hd_buf, &bmi_hd, DIB_RGB_COLORS, SRCCOPY);
     else StretchDIBits(dc, x, y, w, h, 0, 0, W, H, fb, &bmi_fb, DIB_RGB_COLORS, SRCCOPY);
-    int *rects[16]; int nrects = overlay_rects(rects);
+    int *rects[32]; int nrects = overlay_rects(rects);
     for (int k = 0; k < nrects; k++) if (rects[k][2] > 0) BitBlt(dc, rects[k][0], rects[k][1], rects[k][2], rects[k][3], back_dc, rects[k][0], rects[k][1], SRCCOPY);
     ReleaseDC(hwnd, dc);
 }
@@ -1494,27 +1496,159 @@ static void draw_shop(int px, int py, int pw, int ph)
     tip_rect[0] = bx; tip_rect[1] = by; tip_rect[2] = bw; tip_rect[3] = bh;
 }
 
-/* world map screen (key N): the planet explored so far, over the whole window */
+/* world map screen (key N, the quick button): the whole planet (from the
+ * ROM; parts not visited yet are darker), the towns with their names, the
+ * party and the goal of "where next". Zoom: + / -, the wheel or the buttons;
+ * a click or tap centres the view there, the arrows move it */
+static const wchar_t *PLACE[52] = {
+    L"Пиата", L"Миле", L"Зема", L"Долина жизни", L"Био-завод", L"Молкум", L"Круп", L"Пещера", L"Тоное", L"Подвал",
+    L"Налия", L"Руины", L"Аейдо", L"Пещера", L"Кадари", L"Замок Зио", L"Нервус", L"Гараж", L"Монсен", L"Тектоническая система",
+    L"Терми", L"Башня Ладей", L"Зелан", L"Куран", L"Храм Раджа", L"Рион", L"Тайлер", L"Ангар", L"Зоша", L"",
+    L"Система управления погодой", L"Рашель", L"Мииса", L"Лес", L"Особняк целителей", L"Джут", L"Оружейный завод", L"Храм Гумбеос", L"Воздушный замок", L"Башня Гаруба",
+    L"Пещера", L"Храм воина", L"Джуза", L"Торинко", L"Оружейный завод", L"Башня тишины", L"Башня храбрости", L"Башня силы", L"Пещера", L"Мост тьмы",
+    L"Космопорт", L"Башня гнева" };
+static const wchar_t *place_name(int i) { return i >= 0 && i < 52 ? PLACE[i] : L""; }
+static int story_goal(void);   /* the place "where next" points to, -1 if none */
+static int world_zoom = 1, world_cx = -1, world_cy = -1, world_planet = -1;
+static int wbtn[3][4];          /* the zoom in / out / to the party buttons */
+static int world_view[6];       /* x0, y0, dw, dh of the map on screen; source x, y */
+static double world_scale;
+static void world_reset_view(void) { world_zoom = 1; world_cx = world_cy = -1; }
+static void world_zoom_by(int d, int at_x, int at_y)
+{
+    int z = world_zoom;
+    world_zoom = d > 0 ? (z >= 8 ? 8 : z * 2) : (z <= 1 ? 1 : z / 2);
+    if (at_x >= 0 && world_scale > 0 && world_zoom != z) {   /* keep the point under the cursor in place */
+        double mx = world_view[4] + (at_x - world_view[0]) / world_scale, my = world_view[5] + (at_y - world_view[1]) / world_scale;
+        world_cx = (int)mx; world_cy = (int)my;
+    }
+}
+static void world_click(int x, int y)
+{
+    for (int k = 0; k < 3; k++)
+        if (x >= wbtn[k][0] && x < wbtn[k][0] + wbtn[k][2] && y >= wbtn[k][1] && y < wbtn[k][1] + wbtn[k][3]) {
+            if (k == 0) world_zoom_by(1, -1, -1); else if (k == 1) world_zoom_by(-1, -1, -1); else world_reset_view();
+            return;
+        }
+    if (world_scale > 0 && x >= world_view[0] && y >= world_view[1] && x < world_view[0] + world_view[2] && y < world_view[1] + world_view[3]) {
+        world_cx = world_view[4] + (int)((x - world_view[0]) / world_scale);
+        world_cy = world_view[5] + (int)((y - world_view[1]) / world_scale);
+        if (world_zoom == 1) world_zoom = 2;
+    }
+}
+static void world_pan(int dx, int dy)
+{
+    if (world_scale <= 0) return;
+    int step = (int)(world_view[2] / world_scale / 6) + 1;
+    if (world_cx < 0) { world_cx = world_view[4] + (int)(world_view[2] / world_scale / 2); world_cy = world_view[5] + (int)(world_view[3] / world_scale / 2); }
+    world_cx += dx * step; world_cy += dy * step;
+}
 static void draw_world(int cw, int ch)
 {
     static uint32_t img[512 * 1024];
     int w, h, mx, my;
-    if (!emu_world_image(img, 512, 1024, &w, &h, &mx, &my)) { world_open = 0; set_status(L"карта мира доступна на карте планеты"); return; }
+    int planet = emu_world_image(img, 512, 1024, &w, &h, &mx, &my);
+    if (!planet) { world_open = 0; set_status(L"карта мира появится, когда отряд выйдет на карту планеты"); return; }
+    planet--;
+    if (planet != world_planet) { world_planet = planet; world_reset_view(); }
     fill(0, 0, cw, ch, RGBC(8, 8, 16));
-    int sc = (ch - font_h * 3) / h; if ((cw - font_h * 2) / w < sc) sc = (cw - font_h * 2) / w;
-    int dw, dh;
-    if (sc >= 1) { dw = w * sc; dh = h * sc; } else { dh = ch - font_h * 3; dw = w * dh / h; if (dw > cw) { dw = cw; dh = h * dw / w; } }
-    int x0 = (cw - dw) / 2, y0 = font_h * 2;
-    BITMAPINFO bi; memset(&bi, 0, sizeof bi);
-    bi.bmiHeader.biSize = sizeof bi.bmiHeader; bi.bmiHeader.biWidth = w; bi.bmiHeader.biHeight = -h;
-    bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32; bi.bmiHeader.biCompression = BI_RGB;
-    SetStretchBltMode(back_dc, sc >= 1 ? COLORONCOLOR : HALFTONE); SetBrushOrgEx(back_dc, 0, 0, 0);
-    StretchDIBits(back_dc, x0, y0, dw, dh, 0, 0, w, h, img, &bi, DIB_RGB_COLORS, SRCCOPY);
-    int on = (now_ms() / 300) & 1, m = font_h / 2 > 4 ? font_h / 2 : 4;
-    int cx = x0 + mx * dw / w, cy = y0 + my * dh / h;
-    fill(cx - m / 2 - 1, cy - m / 2 - 1, m + 2, m + 2, RGBC(0, 0, 0));
-    fill(cx - m / 2, cy - m / 2, m, m, on ? RGBC(255, 60, 60) : RGBC(255, 230, 120));
-    draw_text(font_h, font_h / 2, L"Карта мира — открывается по мере путешествия.  N или Esc — закрыть", RGBC(225, 230, 255), font_small);
+    int top = font_h * 2, bot = font_h * 5 / 2, side = font_h;
+    int aw = cw - side * 2, ah = ch - top - bot;
+    if (aw < 50 || ah < 50) return;
+    double fit = (double)aw / w < (double)ah / h ? (double)aw / w : (double)ah / h;
+    if (fit >= 2) fit = (int)fit;   /* whole pixels when it costs little room */
+    double sc = fit * world_zoom;
+    /* the part shown: centred on the chosen point, else on the party */
+    int vw = (int)(aw / sc), vh = (int)(ah / sc);
+    if (vw > w) vw = w; if (vh > h) vh = h;
+    int cx = world_cx >= 0 ? world_cx : mx >= 0 ? mx : w / 2, cy = world_cy >= 0 ? world_cy : my >= 0 ? my : h / 2;
+    int sx = cx - vw / 2, sy = cy - vh / 2;
+    if (sx < 0) sx = 0; if (sy < 0) sy = 0; if (sx > w - vw) sx = w - vw; if (sy > h - vh) sy = h - vh;
+    if (world_cx >= 0) { world_cx = sx + vw / 2; world_cy = sy + vh / 2; }   /* kept inside after panning */
+    int dw = (int)(vw * sc), dh = (int)(vh * sc), x0 = side + (aw - dw) / 2, y0 = top + (ah - dh) / 2;
+    {   /* the part shown, copied out (a source rectangle of a top-down bitmap is read differently by systems) */
+        static uint32_t part[512 * 1024];
+        for (int yy = 0; yy < vh; yy++) memcpy(part + (size_t)yy * vw, img + (size_t)(sy + yy) * w + sx, (size_t)vw * 4);
+        BITMAPINFO bi; memset(&bi, 0, sizeof bi);
+        bi.bmiHeader.biSize = sizeof bi.bmiHeader; bi.bmiHeader.biWidth = vw; bi.bmiHeader.biHeight = -vh;
+        bi.bmiHeader.biPlanes = 1; bi.bmiHeader.biBitCount = 32; bi.bmiHeader.biCompression = BI_RGB;
+        SetStretchBltMode(back_dc, sc >= 1 ? COLORONCOLOR : HALFTONE); SetBrushOrgEx(back_dc, 0, 0, 0);
+        StretchDIBits(back_dc, x0, y0, dw, dh, 0, 0, vw, vh, part, &bi, DIB_RGB_COLORS, SRCCOPY);
+    }
+    world_view[0] = x0; world_view[1] = y0; world_view[2] = dw; world_view[3] = dh; world_view[4] = sx; world_view[5] = sy;
+    world_scale = sc;
+#define WX(px) (x0 + (int)(((px) - sx) * sc))
+#define WY(py) (y0 + (int)(((py) - sy) * sc))
+#define WIN(px, py) ((px) >= sx && (px) < sx + vw && (py) >= sy && (py) < sy + vh)
+    /* towns */
+    int place[48], tx[48], ty[48], nt = emu_world_towns(planet, place, tx, ty, 48), goal = story_goal();
+    int ms = font_h / 2 > 6 ? font_h / 2 : 6;
+    int lab[48][4], nl = 0;   /* names already written: the next ones go where they do not overlap */
+    for (int pass = 0; pass < 2; pass++)   /* the goal's name first */
+    for (int i = 0; i < nt; i++) {
+        if ((place[i] == goal) != (pass == 0) || !WIN(tx[i], ty[i])) continue;
+        int x = WX(tx[i]), y = WY(ty[i]);
+        fill(x - ms / 2 - 1, y - ms / 2 - 1, ms + 2, ms + 2, RGBC(0, 0, 0));
+        fill(x - ms / 2, y - ms / 2, ms, ms, place[i] == goal ? RGBC(255, 210, 80) : RGBC(240, 240, 255));
+        const wchar_t *n = place_name(place[i]);
+        int tw = text_w(n, font_small) + 6, th = font_h, gx = place[i] == goal ? ms + 8 : 0, cand[4][2] = { { x + ms + gx, y - th / 2 }, { x - ms - tw, y - th / 2 }, { x - tw / 2, y + ms }, { x - tw / 2, y - ms - th } };
+        for (int c = 0; c < 4; c++) {
+            int lx = cand[c][0], ly = cand[c][1], ok = lx >= x0 && lx + tw <= x0 + dw && ly >= y0 && ly + th <= y0 + dh;
+            for (int k = 0; k < nl && ok; k++)
+                if (lx < lab[k][0] + lab[k][2] && lx + tw > lab[k][0] && ly < lab[k][1] + lab[k][3] && ly + th > lab[k][1]) ok = 0;
+            if (!ok) continue;
+            fill(lx, ly, tw, th, RGBC(10, 12, 28));
+            draw_text(lx + 3, ly, n, place[i] == goal ? RGBC(255, 220, 120) : RGBC(225, 230, 255), font_small);
+            if (nl < 48) { lab[nl][0] = lx; lab[nl][1] = ly; lab[nl][2] = tw; lab[nl][3] = th; nl++; }
+            break;
+        }
+    }
+    /* the goal of "where next": a pulsing ring */
+    for (int i = 0; i < nt; i++) if (place[i] == goal && WIN(tx[i], ty[i])) {
+        int x = WX(tx[i]), y = WY(ty[i]), r = ms + 3 + (int)((now_ms() / 120) % 6);
+        for (int k = 0; k < 2; k++) {
+            fill(x - r - k, y - r - k, 2 * (r + k) + 1, 1, RGBC(255, 200, 60)); fill(x - r - k, y + r + k, 2 * (r + k) + 1, 1, RGBC(255, 200, 60));
+            fill(x - r - k, y - r - k, 1, 2 * (r + k) + 1, RGBC(255, 200, 60)); fill(x + r + k, y - r - k, 1, 2 * (r + k) + 1, RGBC(255, 200, 60));
+        }
+    }
+    /* the party */
+    if (mx >= 0 && WIN(mx, my)) {
+        int on = (now_ms() / 300) & 1, m = ms + 2;
+        int px = WX(mx), py = WY(my);
+        fill(px - m / 2 - 1, py - m / 2 - 1, m + 2, m + 2, RGBC(0, 0, 0));
+        fill(px - m / 2, py - m / 2, m, m, on ? RGBC(255, 60, 60) : RGBC(255, 140, 120));
+    }
+#undef WX
+#undef WY
+#undef WIN
+    static const wchar_t *pn[2] = { L"Мотавия", L"Дезолис" };
+    wchar_t t[200];
+    _snwprintf(t, 199, L"Карта мира: %ls%ls", planet < 2 ? pn[planet] : L"", mx < 0 ? L" (отряд не на этой карте)" : L""); t[199] = 0;
+    draw_text(font_h, font_h / 2, t, RGBC(255, 240, 180), font_big ? font_big : font_small);
+    {   /* the legend and the controls */
+        int lx = font_h, ly = ch - bot + font_h / 3, q = font_h * 2 / 3;
+        static const struct { DWORD c; const wchar_t *t; } L[3] = {
+            { RGBC(255, 60, 60), L"отряд" }, { RGBC(255, 210, 80), L"цель «Куда идти»" }, { RGBC(240, 240, 255), L"город" } };
+        for (int k = 0; k < 3; k++) {
+            fill(lx, ly + (font_h - q) / 2, q, q, L[k].c);
+            draw_text(lx + q + font_h / 3, ly, L[k].t, RGBC(200, 205, 230), font_small);
+            lx += q + font_h / 3 + text_w(L[k].t, font_small) + font_h;
+        }
+        draw_text(lx, ly, L"тёмное — ещё не пройдено", RGBC(150, 156, 190), font_small);
+        draw_text(font_h, ly + font_h, L"Щелчок — приблизить туда · колесо, +/−, A/C — масштаб · стрелки — сдвиг · N или Esc — закрыть",
+                  RGBC(150, 156, 190), font_small);
+    }
+    /* buttons: + − and back to the party */
+    static const wchar_t *bl[3] = { L"+", L"−", L"◎" };
+    int bs = font_h * 3 / 2 + 4;
+    for (int k = 0; k < 3; k++) {
+        int bx = cw - side - (3 - k) * (bs + 6), by = font_h / 4;
+        int hov = g_mouse_x >= bx && g_mouse_x < bx + bs && g_mouse_y >= by && g_mouse_y < by + bs;
+        fill(bx, by, bs, bs, hov ? RGBC(70, 96, 170) : RGBC(28, 34, 70));
+        fill(bx, by, bs, 1, RGBC(110, 120, 170));
+        draw_text(bx + (bs - text_w(bl[k], font_big ? font_big : font_small)) / 2, by + (bs - font_h * 5 / 4) / 2, bl[k], RGBC(240, 240, 255), font_big ? font_big : font_small);
+        wbtn[k][0] = bx; wbtn[k][1] = by; wbtn[k][2] = bs; wbtn[k][3] = bs;
+    }
     menu_rect[0] = 0; menu_rect[1] = 0; menu_rect[2] = cw; menu_rect[3] = ch;
 }
 
@@ -1606,11 +1740,13 @@ static void scale_portrait(const uint32_t *src, uint32_t *out, int s, int grey)
         }
     }
 }
+static void draw_turns(int py, int ph);
 static void draw_party(int px, int py, int pw, int ph)
 {
     (void)px; (void)pw; (void)ph;
     int m = emu_game_mode_top();
-    if (m != 0x0C && m != 0x14) return;
+    if (m == 0x14) { draw_turns(py, ph); return; }   /* in battle: the order of turns instead */
+    if (m != 0x0C) return;
     const uint8_t *r = emu_work_ram();
     int s = back_h * 10 / 100; if (s < 52) s = 52; if (s > 128) s = 128;
     int sh = font_h * 4 / 5 + 2, tp = font_h / 4 > 3 ? font_h / 4 : 3, gap = font_h / 2;
@@ -1661,13 +1797,106 @@ static void draw_party(int px, int py, int pw, int ph)
     }
 }
 
+/* battle: the order of turns, top left, in place of the party panel.
+ * The game's fighters are 64-byte entries at $FF4400 (1-5 the party in
+ * order, 6-9 the monsters; +0 non-zero when present, +4 the address of the
+ * character's or monster's record). When the orders are given ($0053F8) it
+ * fills $FFEFB0 with (fighter, initiative) words, highest first, ending
+ * with 0: initiative = the record's byte +$20 (agility) plus a random part
+ * up to half the highest; who acts is $FF4140 (1 = the first). While the
+ * game waits for orders ($FF4109 non-zero) that table is the last round's,
+ * so the panel shows the likely order by agility instead. */
+static int draw_thumb(int bx, int by, int bw, int bh, int id);
+/* the table at $FFEFB0 is left from the last battle until the first round
+ * is ordered: it counts once it changes (checked every frame) */
+static int turns_fresh;
+static void turns_track(void)
+{
+    static int inb; static uint8_t snap[40];
+    const uint8_t *r = emu_work_ram();
+    if (!emu_in_battle()) { inb = 0; turns_fresh = 0; return; }
+    if (!inb) { inb = 1; memcpy(snap, r + 0xEFB0, 40); turns_fresh = 0; return; }
+    if (!turns_fresh && memcmp(snap, r + 0xEFB0, 40)) turns_fresh = 1;
+}
+static void draw_turns(int py, int ph)
+{
+    const uint8_t *r = emu_work_ram();
+    int ordering = r[0x4109] != 0 || !turns_fresh;
+    int ids[9], n = 0, cur = -1;
+    if (!ordering) {
+        for (int k = 0; k < 9; k++) { int id = r[0xEFB0 + k * 4] << 8 | r[0xEFB1 + k * 4]; if (id < 1 || id > 9) break; ids[n++] = id; }
+        cur = (r[0x4140] << 8 | r[0x4141]) - 1;
+    }
+    if (ordering || !n) {
+        int ag[9]; n = 0;
+        for (int i = 0; i < 9; i++) {
+            const uint8_t *e = r + 0x4400 + i * 64;
+            if (!(e[0] | e[1])) continue;
+            int a = e[6] << 8 | e[7];
+            if (r[(a + 22) & 0xFFFF] & 0x6E) continue;   /* down, asleep...: no turn */
+            int v = r[(a + 32) & 0xFFFF], k = n++;
+            while (k > 0 && ag[k - 1] < v) { ag[k] = ag[k - 1]; ids[k] = ids[k - 1]; k--; }
+            ag[k] = v; ids[k] = i + 1;
+        }
+        cur = -1;
+    }
+    if (!n) return;
+    int x0 = font_h / 2 + 3, y = (py > font_h / 2 ? py : font_h / 2) + 3;
+    int hdr = font_h + 2, gap = font_h / 4 + 1, hb = font_h / 4 > 3 ? font_h / 4 : 3;
+    int s = back_h * 8 / 100; if (s < 40) s = 40; if (s > 96) s = 96;
+    int avail = back_h - y - hdr - font_h / 2;     /* the game's windows at the bottom start further right */
+    while (s > 28 && n * (s + 4 + hb + 2 + gap) > avail) s -= 2;
+    int aw = s / 6 + 3, col = s + 8 + aw;
+    const wchar_t *title = ordering ? L"Ходы ≈" : L"Ходы";
+    if (col < text_w(title, font_small) + 8) col = text_w(title, font_small) + 8;
+    fill(x0 - 3, y - 3, col, hdr + 3 + n * (s + 4 + hb + 2 + gap), RGBC(14, 16, 30));
+    { int tw = text_w(title, font_small); draw_text(x0 + (tw < s ? (s - tw) / 2 : 0), y - 1, title, RGBC(255, 220, 130), font_small); }
+    turn_rect[0] = x0 - 3; turn_rect[1] = y - 3; turn_rect[2] = col; turn_rect[3] = hdr + 3 + n * (s + 4 + hb + 2 + gap);
+    quick_bottom = turn_rect[1] + turn_rect[3];
+    y += hdr;
+    for (int k = 0; k < n; k++) {
+        const uint8_t *e = r + 0x4400 + (ids[k] - 1) * 64;
+        int a = e[6] << 8 | e[7], hp = 0, hpm = 1, out = (r[(a + 22) & 0xFFFF] & 0x6E) != 0, done = !ordering && cur >= 0 && k < cur;
+        int now = k == cur;
+        DWORD frame = now ? RGBC(255, 210, 80) : RGBC(70, 78, 120);
+        fill(x0 - 2, y - 2, s + 4, s + 4, frame);
+        fill(x0, y, s, s, RGBC(26, 30, 56));
+        if (a >= 0xF500 && a < 0xF500 + 11 * 0x80) {           /* a character */
+            int rec = (a - 0xF500) / 0x80;
+            const uint8_t *c = r + a;
+            hp = (int16_t)(c[0x0E] << 8 | c[0x0F]); hpm = c[0x10] << 8 | c[0x11];
+            const uint32_t *pic = portrait_pixels(rec);
+            if (pic) put_portrait(pic, x0, y, s, out || hp <= 0 || done);
+            else { wchar_t nm[16]; ui_ps4_name(c, nm, 16); nm[2] = 0; draw_text(x0 + s / 4, y + s / 3, nm, RGBC(230, 230, 255), font_big); }
+        } else if (a >= 0x4200 && a < 0x4600) {                  /* a monster */
+            int id = r[a + 0x68] << 8 | r[a + 0x69];
+            hp = (int16_t)(r[a + 0x0E] << 8 | r[a + 0x0F]); hpm = (int16_t)(r[a + 0x10] << 8 | r[a + 0x11]);
+            if (!draw_thumb(x0 + 2, y + 2, s - 4, s - 4, id)) { int is = s * 2 / 3; draw_icon(x0 + (s - is) / 2, y + (s - is) / 2, is, IC_SKULL, 0); }
+            if (out || hp <= 0 || done) {   /* dimmed: a dark veil over every other pixel */
+                uint32_t *dst = (uint32_t *)back_bits;
+                for (int yy = y; yy < y + s && yy < back_h; yy++) for (int xx = x0 + (yy & 1); xx < x0 + s && xx < back_w; xx += 2) dst[(size_t)yy * back_w + xx] = 0x101020;
+            }
+        }
+        if (now) {   /* who acts now: an arrow on the right */
+            int ah = aw * 2; for (int i = 0; i < aw; i++) fill(x0 + s + 3 + i, y + s / 2 - ah / 2 + i, 1, ah - 2 * i, RGBC(255, 210, 80));
+        }
+        { wchar_t t[8]; _snwprintf(t, 7, L"%d", k + 1); t[7] = 0;   /* the place in the order */
+          int tw = text_w(t, font_small) + font_h / 3, th = font_h * 4 / 5;
+          fill(x0, y, tw, th, RGBC(18, 20, 40)); draw_text(x0 + font_h / 6, y - 1, t, now ? RGBC(255, 220, 130) : RGBC(200, 205, 230), font_small); }
+        int hy = y + s + 3;
+        fill(x0, hy, s, hb, RGBC(48, 20, 24));
+        if (hpm > 0 && hp > 0) { int v = hp > hpm ? hpm : hp; fill(x0, hy, s * v / hpm, hb, v * 4 <= hpm ? RGBC(200, 58, 48) : v * 2 <= hpm ? RGBC(206, 160, 52) : RGBC(62, 160, 78)); }
+        y += s + 4 + hb + 2 + gap;
+    }
+}
+
 /* quick access buttons, under the party panel (or at the top left without it):
  * journal, bestiary, world map, where next, party, save, the pause menu */
 static const struct { int icon; const wchar_t *name; } QB[7] = {
     { IC_BOOK, L"Журнал" }, { IC_SKULL, L"Бестиарий" }, { IC_MAP, L"Карта мира" }, { IC_COMPASS, L"Куда идти" },
     { IC_PARTY, L"Отряд" }, { IC_SAVE, L"Сохранить" }, { IC_MENU, L"Меню" } };
 static int qb_x[7], qb_y[7], qb_s;
-static void draw_quickbar(int py)
+static void draw_quickbar(int py, int ph)
 {
     int m = emu_game_mode_top();
     if (m != 0x0C && m != 0x14) return;
@@ -1675,6 +1904,8 @@ static void draw_quickbar(int py)
     int gap = font_h / 4 + 1, cols = 4;
     int x0 = font_h / 2, y0 = quick_bottom ? quick_bottom + font_h / 2 : (py > font_h / 2 ? py : font_h / 2) + 3;
     if (y0 + 2 * (s + gap) > back_h) return;
+    /* in battle the game's windows fill the bottom: the buttons only where they stay clear of them */
+    if (m == 0x14 && y0 + 2 * (s + gap) > py + ph * 72 / 100) return;
     qb_s = s;
     int hover = -1;
     { int pw = cols * (s + gap) - gap, ph = 2 * (s + gap) - gap;   /* the panel under the buttons, gaps included */
@@ -1738,6 +1969,46 @@ static const mthumb_t *monster_thumb(int id)
     }
     return t->px ? t : 0;
 }
+/* the rows of a column group's picture: from its first pixel down to a gap of 3 empty rows */
+static int mon_rows(const uint8_t *lay, int sx, int ex, int top, int bottom, int *y0, int *y1)
+{
+    int gap = 0; *y0 = *y1 = -1;
+    for (int y = top; y < bottom; y++) {
+        int any = 0;
+        for (int x = sx; x <= ex; x++) if (MON_PIX(lay[y * MD_W_MAX + x])) { any = 1; break; }
+        if (any) { if (*y0 < 0) *y0 = y; *y1 = y; gap = 0; }
+        else if (*y0 >= 0 && ++gap >= 3) break;
+    }
+    return *y0 >= 0 && *y1 - *y0 + 1 >= 12 && ex - sx + 1 <= 200;
+}
+static void monster_save(int id, const uint32_t *fb, const uint8_t *lay, int sx, int ex, int y0, int y1)
+{
+    int w = ex - sx + 1, h = y1 - y0 + 1;
+    uint8_t *rgba = calloc((size_t)w * h, 4);
+    if (!rgba) return;
+    for (int y = 0; y < h; y++)
+        for (int x = 0; x < w; x++) {
+            int o = (y0 + y) * MD_W_MAX + sx + x;
+            if (!MON_PIX(lay[o])) continue;
+            uint32_t c = fb[o];
+            uint8_t *q = rgba + ((size_t)y * w + x) * 4;
+            q[0] = (uint8_t)(c >> 16); q[1] = (uint8_t)(c >> 8); q[2] = (uint8_t)c; q[3] = 255;
+        }
+    size_t pn; uint8_t *png = png_encode(rgba, w, h, &pn);
+    free(rgba);
+    if (png) {
+        saves_dir();
+        { wchar_t d[700]; path_in_exe_dir(d, L"saves\\monsters"); CreateDirectoryW(d, 0); }
+        wchar_t p[700]; mthumb_path(p, id);
+        if (write_file(p, png, pn)) { mthumb[id].tried = 0; free(mthumb[id].px); mthumb[id].px = 0; monster_thumb(id); logw("monster picture %d: %dx%d", id, w, h); }
+        free(png);
+    }
+}
+/* while the game waits for orders nobody flashes or moves: the monsters'
+ * columns are grouped; when there are as many groups as monsters they go in
+ * order, else groups the size of pictures already known are set aside and
+ * a single group left goes to the single monster still without a picture
+ * (a boss beside its helpers, one of them hidden behind a window) */
 static void monster_capture(void)
 {
     static uint64_t last;
@@ -1746,17 +2017,19 @@ static void monster_capture(void)
     int ids[8], hp[8], mx[8];
     int n = bestiary_battle(ids, hp, mx, 8);
     if (n <= 0 || emu_work_ram()[0x4109] == 0) return;   /* not waiting for orders */
-    int alive[8], na = 0, need = 0;
+    int alive[8], na = 0, need = 0, unknown = -1, nunknown = 0;
     for (int i = 0; i < n; i++) if (hp[i] > 0) {
-        if (hp[i] < mx[i]) return;                         /* someone is hurt: may be flashing */
         alive[na++] = i;
-        if (ids[i] >= 0 && ids[i] < BEST_MAX && !monster_thumb(ids[i])) need = 1;
+        if (ids[i] >= 0 && ids[i] < BEST_MAX && !monster_thumb(ids[i])) {
+            need = 1;
+            if (unknown != ids[i]) { if (unknown < 0) { unknown = ids[i]; nunknown = 1; } else nunknown = 2; }
+        }
     }
     if (!na || !need) return;
     int W, H; const uint32_t *fb = emu_framebuffer(&W, &H);
     const uint8_t *lay = emu_layers();
     int top = 4, zone = H * 56 / 100, bottom = H * 74 / 100;
-    /* columns with sprite pixels in the upper part, grouped (gaps up to 3) */
+    /* columns with monster pixels in the upper part, grouped (gaps up to 4) */
     static uint8_t col[MD_W_MAX];
     for (int x = 0; x < W; x++) { col[x] = 0; for (int y = top; y < zone; y++) if (MON_PIX(lay[y * MD_W_MAX + x])) { col[x] = 1; break; } }
     int sx[8], ex[8], ns = 0;
@@ -1768,39 +2041,38 @@ static void monster_capture(void)
         if (b - a + 1 >= 12) { if (ns == 8) return; sx[ns] = a; ex[ns] = b; ns++; }
         x = b + 1;
     }
-    if (ns != na) return;
-    saves_dir();
-    { wchar_t d[700]; path_in_exe_dir(d, L"saves\\monsters"); CreateDirectoryW(d, 0); }
+    if (ns == na) {
+        for (int k = 0; k < ns; k++) {
+            int id = ids[alive[k]], y0, y1;
+            if (id < 0 || id >= BEST_MAX || monster_thumb(id)) continue;
+            if (mon_rows(lay, sx[k], ex[k], top, bottom, &y0, &y1)) monster_save(id, fb, lay, sx[k], ex[k], y0, y1);
+        }
+        return;
+    }
+    if (nunknown != 1) return;
+    int pick = -1, npick = 0;
     for (int k = 0; k < ns; k++) {
-        int id = ids[alive[k]];
-        if (id < 0 || id >= BEST_MAX || monster_thumb(id)) continue;
-        /* rows: from the first sprite row down to a gap of 3 empty rows */
-        int y0 = -1, y1 = -1, gap = 0;
-        for (int y = top; y < bottom; y++) {
-            int any = 0;
-            for (int x = sx[k]; x <= ex[k]; x++) if (MON_PIX(lay[y * MD_W_MAX + x])) { any = 1; break; }
-            if (any) { if (y0 < 0) y0 = y; y1 = y; gap = 0; }
-            else if (y0 >= 0 && ++gap >= 3) break;
+        int y0, y1;
+        if (!mon_rows(lay, sx[k], ex[k], top, bottom, &y0, &y1)) continue;
+        int w = ex[k] - sx[k] + 1, h = y1 - y0 + 1, known = 0;
+        for (int j = 0; j < na; j++) {
+            const mthumb_t *t = monster_thumb(ids[alive[j]]);
+            if (t && abs(t->w - w) <= 2 && abs(t->h - h) <= 2) known = 1;
         }
-        if (y0 < 0 || y1 - y0 + 1 < 12 || ex[k] - sx[k] + 1 > 200) continue;
-        int w = ex[k] - sx[k] + 1, h = y1 - y0 + 1;
-        uint8_t *rgba = calloc((size_t)w * h, 4);
-        if (!rgba) return;
-        for (int y = 0; y < h; y++)
-            for (int x = 0; x < w; x++) {
-                int o = (y0 + y) * MD_W_MAX + sx[k] + x;
-                if (!MON_PIX(lay[o])) continue;
-                uint32_t c = fb[o];
-                uint8_t *q = rgba + ((size_t)y * w + x) * 4;
-                q[0] = (uint8_t)(c >> 16); q[1] = (uint8_t)(c >> 8); q[2] = (uint8_t)c; q[3] = 255;
-            }
-        size_t pn; uint8_t *png = png_encode(rgba, w, h, &pn);
-        free(rgba);
-        if (png) {
-            wchar_t p[700]; mthumb_path(p, id);
-            if (write_file(p, png, pn)) { mthumb[id].tried = 0; free(mthumb[id].px); mthumb[id].px = 0; monster_thumb(id); logw("monster picture %d: %dx%d", id, w, h); }
-            free(png);
+        if (known) continue;
+        /* cut by a window (or the picture's edge) at its sides: not whole */
+        int cut = sx[k] < 2 || ex[k] > W - 3;
+        for (int y = y0; y <= y1 && !cut; y++) {
+            if (sx[k] >= 2 && lay[y * MD_W_MAX + sx[k] - 2] == 4) cut = 1;
+            if (ex[k] + 2 < W && lay[y * MD_W_MAX + ex[k] + 2] == 4) cut = 1;
         }
+        if (cut) continue;
+        pick = k; npick++;
+    }
+    if (npick == 1) {
+        int y0, y1;
+        mon_rows(lay, sx[pick], ex[pick], top, bottom, &y0, &y1);
+        monster_save(unknown, fb, lay, sx[pick], ex[pick], y0, y1);
     }
 }
 /* a monster picture fitted into a box (keeping its shape, whole pixels when possible) */
@@ -1825,22 +2097,22 @@ static int draw_thumb(int bx, int by, int bw, int bh, int id)
     return 1;
 }
 
-/* the elements a monster is weak to, as icons (from the bestiary's text:
- * "огонь, лёд (очень)") */
-static int weak_icons(const char *weak, int *ic, int *strong, int max)
+/* the elements in a bestiary text ("огонь, лёд (очень)") as icons; flag:
+ * "(очень)" (very weak) or "(не берёт)" (not hurt at all) */
+static const struct { const char *name; int icon; const wchar_t *wname; } ELEM[8] = {
+    { "ветер", IC_WIND, L"ветер" }, { "энергия", IC_ENERGY, L"энергия" }, { "огонь", IC_FIRE, L"огонь" }, { "гравитация", IC_GRAVITY, L"гравитация" },
+    { "лёд", IC_ICE, L"лёд" }, { "свет", IC_LIGHT, L"свет" }, { "гром", IC_THUNDER, L"гром" }, { "святость", IC_HOLY, L"святость" } };
+static int elem_icons(const char *text, int *ic, int *flag, int max)
 {
-    static const struct { const char *name; int icon; } EL[8] = {
-        { "ветер", IC_WIND }, { "энергия", IC_ENERGY }, { "огонь", IC_FIRE }, { "гравитация", IC_GRAVITY },
-        { "лёд", IC_ICE }, { "свет", IC_LIGHT }, { "гром", IC_THUNDER }, { "святость", IC_HOLY } };
     int n = 0;
-    const char *p = weak;
+    const char *p = text;
     while (p && *p && n < max) {
         while (*p == ',' || *p == ' ') p++;
         for (int e = 0; e < 8; e++) {
-            size_t l = strlen(EL[e].name);
-            if (!strncmp(p, EL[e].name, l)) {
-                ic[n] = EL[e].icon;
-                strong[n] = !strncmp(p + l, " (очень)", strlen(" (очень)"));
+            size_t l = strlen(ELEM[e].name);
+            if (!strncmp(p, ELEM[e].name, l)) {
+                ic[n] = e;
+                flag[n] = !strncmp(p + l, " (", 2);
                 n++; break;
             }
         }
@@ -1849,58 +2121,112 @@ static int weak_icons(const char *weak, int *ic, int *strong, int max)
     return n;
 }
 
-/* monsters' HP in battle, top right: an icon (a gear for machines), the
- * name, the bar with numbers and the elements it is weak to as icons
- * (a gold frame: very weak) */
+/* monsters' HP in battle, top right: the monster's picture (or an icon),
+ * the name, the bar with numbers, then the elements it is weak to (green;
+ * a gold frame: very weak) and those it resists (red; crossed: not hurt at
+ * all). The panel keeps clear of the game's own windows at the top: it
+ * gets narrower, or goes below them. Pointing at an element names it. */
 static void draw_enemy_hp(int px, int py, int pw, int ph)
 {
-    (void)ph;
     int ids[8], hp[8], mx[8];
     int n = bestiary_battle(ids, hp, mx, 8);
     if (n <= 0) return;
     monster_capture();
-    wchar_t nm[8][48]; int alive = 0, wname = 0, nweak[8], wic[8][8], wst[8][8], mach[8], maxweak = 0;
+    wchar_t nm[8][48]; int alive = 0, wname = 0, nw[8], wic[8][8], wfl[8][8], nr[8], ric[8][8], rfl[8][8], mach[8], maxw = 0, maxr = 0;
     for (int i = 0; i < n; i++) {
         best_info_t b;
         if (!emu_bestiary(ids[i], &b)) return;
         MultiByteToWideChar(65001, 0, b.name, -1, nm[i], 48);
-        nweak[i] = weak_icons(b.weak, wic[i], wst[i], 8);
+        nw[i] = elem_icons(b.weak, wic[i], wfl[i], 8);
+        nr[i] = elem_icons(b.resist, ric[i], rfl[i], 8);
         mach[i] = b.machine;
-        if (hp[i] > 0) { alive++; int w = text_w(nm[i], font_small); if (w > wname) wname = w; if (nweak[i] > maxweak) maxweak = nweak[i]; }
+        if (hp[i] > 0) { alive++; int w = text_w(nm[i], font_small); if (w > wname) wname = w;
+                         if (nw[i] > maxw) maxw = nw[i]; if (nr[i] > maxr) maxr = nr[i]; }
     }
     if (!alive) return;
+    if (maxr > 4) maxr = 4;   /* more: "+N" */
     int thumbs = 0;
     for (int i = 0; i < n; i++) if (hp[i] > 0 && monster_thumb(ids[i])) thumbs = 1;
-    int lh = thumbs ? font_h * 5 / 2 : font_h * 6 / 5, pad = font_h / 3, barw = font_h * 4, numw = text_w(L"0000/0000", font_small);
+    int lh = thumbs ? font_h * 5 / 2 : font_h * 6 / 5, pad = font_h / 3;
     int isz = font_h * 9 / 10, ist = isz + font_h / 4, pic = thumbs ? lh - 4 : isz, pst = pic + font_h / 4;
-    int ww = maxweak ? font_h / 2 + maxweak * ist : 0;
-    int bw = pad * 3 + pst + wname + font_h / 2 + barw + font_h / 2 + numw + ww, bh = alive * lh + pad * 2;
-    int bx = px + pw - bw - font_h / 3, by = py + font_h / 3;
+    int head = (maxw || maxr) ? font_h * 4 / 5 + 2 : 0;
+    const wchar_t *hw = L"слабость", *hr = L"стойкость";
+    int colw = maxw ? (maxw * ist > text_w(hw, font_small) ? maxw * ist : text_w(hw, font_small)) : 0;
+    int colr = maxr ? (maxr * ist + (maxr == 4 ? ist : 0) > text_w(hr, font_small) ? maxr * ist + (maxr == 4 ? ist : 0) : text_w(hr, font_small)) : 0;
+    int bh = head + alive * lh + pad * 2;
+    /* the game's windows (layer 4) in the top part of the picture */
+    int W, H; emu_framebuffer(&W, &H); if (W < 1 || W > MD_W_MAX) W = 320; if (H < 1 || H > 224) H = 224;
+    const uint8_t *lay = emu_layers();
+    int bx = 0, by = py + font_h / 3, bw = 0, compact = 0, barw = 0, numw = 0;
+    for (int mode = 0; mode < 3; mode++) {
+        compact = mode >= 1;
+        if (mode == 2) {   /* below the windows, over the monsters: as low as it gets */
+            lh = font_h * 6 / 5; pic = isz; pst = pic + font_h / 4; bh = head + alive * lh + pad * 2;
+        }
+        barw = compact ? font_h * 2 : font_h * 4;
+        numw = compact ? text_w(L"0000", font_small) : text_w(L"0000/0000", font_small);
+        bw = pad * 3 + pst + wname + font_h / 2 + barw + font_h / 2 + numw + (colw ? font_h / 2 + colw : 0) + (colr ? font_h / 2 + colr : 0);
+        bx = px + pw - bw - font_h / 3;
+        by = py + font_h / 3;
+        int gx0 = (bx - px) * W / pw, gx1 = (bx + bw - px) * W / pw, gy1 = (by + bh - py) * H / ph, bottom = -1;
+        if (gx0 < 0) gx0 = 0; if (gx1 > W) gx1 = W; if (gy1 > H * 45 / 100) gy1 = H * 45 / 100;
+        for (int y = 0; y < H * 45 / 100; y++)
+            for (int x = gx0; x < gx1; x++) if (lay[y * MD_W_MAX + x] == 4) { bottom = y; break; }
+        if (bottom < 0) break;                               /* clear */
+        if (mode == 2) by = py + (bottom + 3) * ph / H;       /* still in the way: below the windows */
+    }
     fill(bx, by, bw, bh, RGBC(150, 160, 200));
     fill(bx + 1, by + 1, bw - 2, bh - 2, RGBC(10, 20, 60));
-    int ty = by + pad;
+    int xbar = bx + pad * 2 + pst + wname + font_h / 2, xw = xbar + barw + font_h / 2 + numw + font_h / 2, xr = xw + (colw ? colw + font_h / 2 : 0);
+    if (head) {
+        if (colw) draw_text(xw, by + pad - 2, hw, RGBC(140, 230, 150), font_small);
+        if (colr) draw_text(xr, by + pad - 2, hr, RGBC(240, 140, 130), font_small);
+    }
+    int ty = by + pad + head, tip_e = -1, tip_kind = 0, tip_fl = 0;
     for (int i = 0; i < n; i++) {
         if (hp[i] <= 0) continue;
         int m = mx[i] > 0 ? mx[i] : hp[i];
         int iy = ty + (lh - isz) / 2 - 1, tyy = ty + (lh - font_h) / 2;
         if (!draw_thumb(bx + pad, ty + 2, pic, lh - 4, ids[i])) draw_icon(bx + pad + (pic - isz) / 2, iy, isz, mach[i] ? IC_GEAR : IC_SKULL, 0);
         draw_text(bx + pad + pst, tyy, nm[i], RGBC(230, 230, 255), font_small);
-        int x = bx + pad * 2 + pst + wname + font_h / 2, yb = ty + lh / 2 - font_h / 6, hb = font_h / 3;
+        int yb = ty + lh / 2 - font_h / 6, hb = font_h / 3;
         int f = m ? barw * (hp[i] > m ? m : hp[i]) / m : 0;
         DWORD col = hp[i] * 4 <= m ? RGBC(240, 80, 70) : hp[i] * 2 <= m ? RGBC(240, 200, 70) : RGBC(90, 220, 110);
-        fill(x, yb, barw, hb, RGBC(40, 40, 70));
-        if (f > 0) fill(x, yb, f, hb, col);
-        wchar_t t[24]; _snwprintf(t, 23, L"%d/%d", hp[i], m); t[23] = 0;
-        draw_text(x + barw + font_h / 2, tyy, t, RGBC(200, 210, 240), font_small);
-        int wx = x + barw + font_h / 2 + numw + font_h / 2;
-        for (int k = 0; k < nweak[i]; k++) {
-            if (wst[i][k]) fill(wx + k * ist - 2, iy - 2, isz + 4, isz + 4, RGBC(214, 176, 92));
-            if (wst[i][k]) fill(wx + k * ist - 1, iy - 1, isz + 2, isz + 2, RGBC(10, 20, 60));
-            draw_icon(wx + k * ist, iy, isz, wic[i][k], 0);
+        fill(xbar, yb, barw, hb, RGBC(40, 40, 70));
+        if (f > 0) fill(xbar, yb, f, hb, col);
+        wchar_t t[24];
+        if (compact) _snwprintf(t, 23, L"%d", hp[i]); else _snwprintf(t, 23, L"%d/%d", hp[i], m);
+        t[23] = 0;
+        draw_text(xbar + barw + font_h / 2, tyy, t, RGBC(200, 210, 240), font_small);
+        for (int k = 0; k < nw[i]; k++) {
+            int x = xw + k * ist;
+            fill(x - 2, iy - 2, isz + 4, isz + 4, wfl[i][k] ? RGBC(214, 176, 92) : RGBC(40, 120, 64));
+            fill(x - 1, iy - 1, isz + 2, isz + 2, RGBC(16, 48, 36));
+            draw_icon(x, iy, isz, ELEM[wic[i][k]].icon, 0);
+            if (g_mouse_x >= x - 2 && g_mouse_x < x + isz + 2 && g_mouse_y >= iy - 2 && g_mouse_y < iy + isz + 2) { tip_e = wic[i][k]; tip_kind = 1; tip_fl = wfl[i][k]; }
         }
+        for (int k = 0; k < nr[i] && k < 4; k++) {
+            int x = xr + k * ist;
+            fill(x - 2, iy - 2, isz + 4, isz + 4, RGBC(130, 50, 46));
+            fill(x - 1, iy - 1, isz + 2, isz + 2, RGBC(52, 18, 22));
+            draw_icon(x, iy, isz, ELEM[ric[i][k]].icon, 1);
+            if (rfl[i][k]) for (int d = 0; d < isz; d++) { fill(x + d, iy + d, 2, 1, RGBC(240, 70, 60)); fill(x + isz - 1 - d, iy + d, 2, 1, RGBC(240, 70, 60)); }
+            if (g_mouse_x >= x - 2 && g_mouse_x < x + isz + 2 && g_mouse_y >= iy - 2 && g_mouse_y < iy + isz + 2) { tip_e = ric[i][k]; tip_kind = 2; tip_fl = rfl[i][k]; }
+        }
+        if (nr[i] > 4) { wchar_t more[8]; _snwprintf(more, 7, L"+%d", nr[i] - 4); more[7] = 0; draw_text(xr + 4 * ist, tyy, more, RGBC(240, 140, 130), font_small); }
         ty += lh;
     }
     hp_rect[0] = bx; hp_rect[1] = by; hp_rect[2] = bw; hp_rect[3] = bh;
+    if (tip_e >= 0) {   /* the element under the mouse, in words */
+        wchar_t t[120];
+        _snwprintf(t, 119, L"%ls: %ls", ELEM[tip_e].wname, tip_kind == 1 ? (tip_fl ? L"очень сильный урон" : L"сильный урон")
+                                                               : (tip_fl ? L"не действует" : L"слабый урон"));
+        t[119] = 0;
+        int tw = text_w(t, font_small) + font_h, th = font_h + 4, tx = bx + bw - tw, tyy = by + bh + 2;
+        fill(tx, tyy, tw, th, RGBC(16, 28, 74));
+        draw_text(tx + font_h / 2, tyy + 2, t, RGBC(255, 240, 180), font_small);
+        hptip_rect[0] = tx; hptip_rect[1] = tyy; hptip_rect[2] = tw; hptip_rect[3] = th;
+    }
 }
 
 static void toggle_fullscreen(void)
@@ -1935,7 +2261,7 @@ static void fit_window(void)
 /* ======================================================================
  * Overlay menu
  * ====================================================================== */
-enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP, M_HD, M_SAVE, M_STATS, M_BEST, M_ACH, M_SET, M_SOUND, M_HINTS, M_GOAL, M_PARTY, M_CHAR };
+enum { M_MAIN, M_VIDEO, M_SPEED, M_KEYS, M_PAD, M_HELP, M_HD, M_SAVE, M_STATS, M_BEST, M_ACH, M_SET, M_SOUND, M_HINTS, M_GOAL, M_PARTY, M_CHAR, M_PLAY };
 static int m_char, m_char_from_panel;   /* the character card: party slot, opened by a click on the party panel */
 static int m_best_page, m_best_next = -1, m_best_ids[10];   /* bestiary page shown; index of the "next page" item */
 static int m_save_load;                     /* M_SAVE lists slots to load (1) or to save into (0) */
@@ -1970,8 +2296,9 @@ static const wchar_t *onoff(int v) { return v ? L"вкл" : L"выкл"; }
 /* "where next": the story stage guessed from who is in the party and the key
  * items carried or worn (after the PSCave walkthrough, parts I-III).
  * Records: 0 Chaz 1 Alys 2 Hahn 3 Rune 4 Gryz 5 Rika 6 Demi 7 Wren 8 Raja 9 Kyra 10 Seth */
-static const wchar_t *story_hint(void)
+static const wchar_t *story_hint_g(int *goal)
 {
+    *goal = -1;
     int m = emu_game_mode_top();
     if (m != 0x0C && m != 0x14) return L"Подсказка появится, когда вы будете в игре (на карте или в бою).";
     const uint8_t *r = emu_work_ram();
@@ -1980,22 +2307,54 @@ static const wchar_t *story_hint(void)
     for (int i = 0; i < 40; i++) has[r[0xF410 + i]] = 1;
     for (int rec = 0; rec < 11; rec++) for (int k = 0; k < 4; k++) has[r[0xF500 + rec * 0x80 + 0x4C + k]] = 1;
     int ring = has[155] || has[156] || has[157] || has[158] || has[159];
-    if (has[119]) return L"У Чаза меч Элсидеон. Рикрос: Башня Гнева (к юго-западу от Храма Тишины) — Чаз должен отказаться от силы гнева. Затем разлом к северу от Пиаты: финальная битва с Бездонной Тьмой (три формы, берегите навыки).";
-    if (ring) return L"Кольца получены. Вернитесь к Ле Руфу в Храм Тишины, затем в Особняк Эсперов: в пещере у статуи Алис Чаз получит меч Элсидеон.";
-    if (has[143]) return L"Воздушный кристалл у вас — летите на Рикрос. Храм Тишины (Ле Руф), затем Башня Мужества (на юго-востоке, на гидрофоиле) и Башня Силы (к северо-западу): там Кольца звёзд.";
-    if (in[10]) return L"Храм Воинов у Крупа (на гидрофоиле от Деми): Воздушный кристалл на вершине столовой горы. Сет окажется Тёмной силой — бой примерно на 8000 ЕЖ.";
-    if (has[142]) return L"Факел затмения у вас. Хищный лес к северо-востоку от Миза: факел расчистит путь к Башне Гарубека. Глаза на 2-м и 5-м этажах открывают проходы, на 7-м — Тёмная сила (Эфесс Руна очень помогает).";
-    if (in[9]) return L"Особняк Эсперов (к юго-востоку от Миза): шар телепатии в подвале. Затем храм Гумбиос (на запад) за Факелом затмения; его украдут — нужен воздушный замок Лашиека (корабль из космопорта у Тайлера).";
-    if (in[8]) return L"Райюн (бармен), Тайлер: надгробие на западе открывает пещеру с кораблём Ландейл — летите на Куран и отключите главный терминал (в конце — Тёмная сила). Потом Зоза, Долина Мист, Центр климата и Миз.";
-    if (in[7]) return L"После крушения на Дезолисе: в храме Раджи он присоединится к отряду, дальше на север — в Райюн.";
-    if (has[57]) return L"Пси-посох у вас. Нурвус под крепостью Зио: в первом ходу боя с Зио используйте Пси-посох как предмет, чтобы снять его защиту.";
-    if (in[6] && !in[1]) return L"С Деми: Машинный центр к югу от Крупа (лендровер), Монсен, Плато-центр — остановите землетрясения. Затем Терми и Башня Ладеа к югу: наверху Приспешник тьмы с Пси-посохом.";
-    if (in[5] && in[1]) return L"После Биозавода: Нальйа и место крушения корабля, Айедо (гильдия, дом Элис — бесплатный отдых), проход на север к Кадари, затем крепость Зио к югу от Кадари.";
-    if (in[4]) return has[141] ? L"Элшлайн у вас: отнесите его в Зему, чтобы расколдовать жителей. Затем дверь в глубине пещеры Долины Рождения ведёт к Биозаводу."
-                               : L"Тоное: Элшлайн лежит в северном подвале. Потом возвращайтесь в Зему.";
-    if (in[3]) return L"С Руном: Круп (родной город Хана), затем Долина-лабиринт к северу от Крупа — Рун разобьёт валун. Дальше Тоное.";
-    if (in[2]) return L"Подвал Академии Пиаты (босс Улей), затем Майл (снаряжение) и Зема: жители окаменели, нужен Элшлайн — идите в Молкум.";
+    if (has[119]) return L"У Чаза меч Элсидеон. На Рикросе: Башня гнева (к юго-западу от Башни тишины) — Чаз должен отказаться от силы гнева. "
+                         L"Затем разлом к северу от Пиаты: финальная битва с Бездонной Тьмой. Три формы подряд, берегите ЕТ и навыки, перед боем — полный отдых.";
+    if (ring) return L"Кольца получены. Вернитесь к Ле Руфу в Башню тишины, затем в Особняк целителей на Дезолисе: в пещере у статуи Алис Чаз получит меч Элсидеон.";
+    if (has[143]) return L"Воздушный кристалл у вас — летите на Рикрос. Башня тишины (Ле Руф), затем Башня храбрости (на юго-востоке, нужен гидрофоил) "
+                         L"и Башня силы (на северо-западе): в них Кольца звёзд.";
+    if (in[10]) { *goal = 6; return L"Храм воина у Крупа (на гидрофоиле от Деми): Воздушный кристалл на вершине столовой горы. "
+                         L"Сет окажется Тёмной силой — бой примерно на 8000 ЕЖ."; }
+    if (has[142]) { *goal = 32; return L"Факел затмения у вас. Хищный лес к северо-востоку от Миисы: факел расчистит путь к Башне Гаруба. "
+                         L"Глаза на 2-м и 5-м этажах открывают проходы, на 7-м — Тёмная сила (Эфесс Руна очень помогает)."; }
+    if (in[9]) { *goal = 34; return L"Особняк целителей (к юго-востоку от Миисы): в подвале шар телепатии. Затем Храм Гумбеос (на запад) за Факелом затмения; "
+                         L"его украдут — нужен Воздушный замок Лашиека (корабль из ангара у Тайлера)."; }
+    if (in[8]) { *goal = 25; return L"Рион (поговорите с барменом), затем Тайлер: надгробие на западе открывает пещеру с кораблём Ландейл. "
+                         L"На нём летите на Куран и отключите главный терминал (в конце — Тёмная сила). Потом Зоша, Центр климата (Система управления погодой) и Мииса."; }
+    if (in[7]) { *goal = 24; return L"После крушения на Дезолисе: в Храме Раджа он присоединится к отряду, дальше на север — Рион."; }
+    if (has[57]) { *goal = 14; return L"Пси-посох у вас. Замок Зио — к югу от Кадари; Нервус под ним. В первом ходу боя с Зио используйте Пси-посох "
+                         L"как предмет, иначе его чёрная энергия не даст нанести урон."; }
+    if (in[6] && !in[1]) { *goal = 18; return L"С Деми: Гараж к югу от Крупа (там лендровер), затем Монсен и Тектоническая система — остановите землетрясения. "
+                         L"Потом Терми и Башня Ладей к югу от него: наверху Приспешник тьмы, у него Пси-посох."; }
+    if (in[5] && in[1]) { *goal = 10; return L"После Био-завода: Налия и место крушения корабля рядом с ней, затем Аейдо "
+                         L"(гильдия охотников, дом Элис — бесплатный отдых). Проход на север ведёт к Кадари, Замок Зио — к югу от Кадари."; }
+    if (in[4]) { *goal = has[141] ? 2 : 8;
+                 return has[141] ? L"Элшлайн у вас: отнесите его в Зему, чтобы расколдовать жителей. Затем дверь в глубине пещеры Долины жизни ведёт к Био-заводу."
+                                 : L"Тоное: Элшлайн лежит в северном подвале. Потом возвращайтесь в Зему."; }
+    if (in[3]) { *goal = 6; return L"С Руном: Круп (родной город Хана), затем Долина-лабиринт к северу от Крупа — Рун разобьёт валун. Дальше Тоное."; }
+    if (in[2]) { *goal = 2; return L"Подвал Академии Пиаты (босс — Улей), затем Миле (снаряжение получше) и Зема: жители окаменели, "
+                         L"нужен Элшлайн — идите в Молкум."; }
+    *goal = 0;
     return L"Академия Пиаты: поговорите с директором, затем спуститесь в подвал.";
+}
+static const wchar_t *story_hint(void) { int g; return story_hint_g(&g); }
+static int story_goal(void) { int g; story_hint_g(&g); return g; }
+/* where a place is from the party, in words ("к северо-востоку, близко") */
+static int goal_direction(int goal, wchar_t *out, int n)
+{
+    static uint32_t img[512 * 1024];
+    int w, h, mx, my, planet = emu_world_image(img, 512, 1024, &w, &h, &mx, &my);
+    if (!planet || mx < 0) return 0;
+    int place[48], tx[48], ty[48], nt = emu_world_towns(planet - 1, place, tx, ty, 48);
+    for (int i = 0; i < nt; i++) if (place[i] == goal) {
+        int dx = tx[i] - mx, dy = ty[i] - my, d = (int)sqrt((double)dx * dx + (double)dy * dy);
+        if (d < 12) { _snwprintf(out, n - 1, L"%ls — совсем рядом", place_name(goal)); out[n - 1] = 0; return 1; }
+        static const wchar_t *dn[8] = { L"к востоку", L"к юго-востоку", L"к югу", L"к юго-западу", L"к западу", L"к северо-западу", L"к северу", L"к северо-востоку" };
+        double ang = atan2((double)dy, (double)dx);   /* y grows southwards */
+        int k = ((int)floor(ang / (3.14159265 / 4) + 0.5) + 8) % 8;
+        _snwprintf(out, n - 1, L"%ls — %ls от отряда, %ls", place_name(goal), dn[k], d < 60 ? L"недалеко" : d < 160 ? L"на среднем расстоянии" : L"далеко");
+        out[n - 1] = 0; return 1;
+    }
+    return 0;
 }
 
 
@@ -2180,6 +2539,19 @@ static void build_menu_pages(void)
         break; }
     case M_STATS: {
         wcscpy(m_title, L"Журнал");
+        {   /* the current goal in a line */
+            static wchar_t g[80]; int goal = story_goal();
+            if (goal >= 0) { _snwprintf(g, 79, L"Цель: %ls", place_name(goal)); g[79] = 0; add_info(IC_COMPASS, g, 0); }
+        }
+        add_i(IC_COMPASS, L"Куда идти дальше", L"▸");
+        add_i(IC_MAP, L"Карта мира (клавиша N)", L"▸");
+        { static wchar_t a2[40]; int got = 0; for (int i = 0; i < NACH; i++) got += ach_time[i] != 0;
+          _snwprintf(a2, 39, L"%d из %d  ▸", got, NACH); add_i(IC_TROPHY, L"Достижения", a2); }
+        add_i(IC_CLOCK, L"Статистика", L"▸");
+        add(L"Назад", 0);
+        break; }
+    case M_PLAY: {
+        wcscpy(m_title, L"Статистика");
         static wchar_t a[80], b2[80], c[80], d[80], e[80];
         fmt_time(a, 79, ST.play_frames); add_info(IC_CLOCK, L"Время в игре (всего)", a);
         fmt_time(b2, 79, session_frames); add_info(IC_CLOCK, L"За этот запуск", b2);
@@ -2192,10 +2564,6 @@ static void build_menu_pages(void)
         add_info(IC_COIN, L"Месеты сейчас", d);
         _snwprintf(e, 79, L"%llu / %llu", (unsigned long long)ST.saves, (unsigned long long)ST.loads);
         add_info(IC_SAVE, L"Быстрых сохранений / загрузок", e);
-        { static wchar_t a2[40]; int got = 0; for (int i = 0; i < NACH; i++) got += ach_time[i] != 0;
-          _snwprintf(a2, 39, L"%d из %d  ▸", got, NACH); add_i(IC_TROPHY, L"Достижения", a2); }
-        add_i(IC_MAP, L"Карта мира (клавиша N)", L"▸");
-        add_i(IC_COMPASS, L"Куда идти дальше", L"▸");
         add(L"Назад", 0);
         break; }
     case M_PARTY: {
@@ -2219,10 +2587,10 @@ static void build_menu_pages(void)
     case M_CHAR: build_char_card(); break;
     case M_GOAL: {
         wcscpy(m_title, L"Куда идти дальше");
-        static wchar_t rows[12][80];
-        const wchar_t *t = story_hint();
+        static wchar_t rows[14][80], dir[120];
+        int goal; const wchar_t *t = story_hint_g(&goal);
         int nr = 0, len = (int)wcslen(t), pos = 0;
-        while (pos < len && nr < 11) {
+        while (pos < len && nr < 12) {
             int take = len - pos < 60 ? len - pos : 60;
             if (pos + take < len) { int k = take; while (k > 30 && t[pos + k] != L' ') k--; if (k > 30) take = k; }
             wcsncpy(rows[nr], t + pos, (size_t)take); rows[nr][take] = 0;
@@ -2230,7 +2598,9 @@ static void build_menu_pages(void)
             pos += take; while (pos < len && t[pos] == L' ') pos++;
         }
         add_info(0, L"", 0);
+        if (goal >= 0 && goal_direction(goal, dir, 120)) add_info(IC_COMPASS, dir, 0);
         add_info(0, L"Подсказка по составу отряда и ключевым предметам (прохождение PSCave).", 0);
+        add_i(IC_MAP, goal >= 0 ? L"Показать цель на карте мира" : L"Карта мира", L"▸");
         add(L"Назад", 0);
         break; }
     case M_ACH: {
@@ -2748,6 +3118,18 @@ static void menu_set_open(int o)
 
 static void apply_video(void) { emu_set_widescreen(ws_ext_for_mode[C.ws_mode]); emu_set_widescreen_battles(C.ws_battle); }
 
+/* journal items: shifted by the goal line when there is one */
+static int journal_sel(int k) { return k + (story_goal() >= 0); }
+/* the world map centred on the goal of "where next" */
+static void world_show_goal(void)
+{
+    static uint32_t img[512 * 1024];
+    int w, h, mx, my, planet = emu_world_image(img, 512, 1024, &w, &h, &mx, &my), goal = story_goal();
+    if (!planet || goal < 0) return;
+    int place[48], tx[48], ty[48], nt = emu_world_towns(planet - 1, place, tx, ty, 48);
+    for (int i = 0; i < nt; i++) if (place[i] == goal) { world_cx = tx[i]; world_cy = ty[i]; world_zoom = 2; }
+}
+
 /* dir: 0 activate, -1/+1 left/right */
 static void menu_act(int dir)
 {
@@ -2763,7 +3145,7 @@ static void menu_act(int dir)
             break;
         case 3: if (!dir) { m_page = M_SET; m_sel = 0; } break;
         case 4: if (!dir) { m_page = M_PARTY; m_sel = 0; } break;
-        case 5: if (!dir) { m_page = M_STATS; m_sel = 6; } break;
+        case 5: if (!dir) { m_page = M_STATS; m_sel = journal_sel(0); } break;
         case 6: if (!dir) { m_page = M_BEST; m_best_page = 0; m_sel = 0; } break;
         case 7: if (!dir) { m_page = M_HELP; m_sel = 0; } break;
         case 8: if (!dir) { menu_set_open(0); launcher_reopen(); } break;
@@ -2853,18 +3235,23 @@ static void menu_act(int dir)
     } else if (m_page == M_HELP) {
         if (!dir) { m_page = M_MAIN; m_sel = 7; }
     } else if (m_page == M_STATS) {
-        if (!dir && i == 6) { m_page = M_ACH; m_sel = NACH; }
-        if (!dir && i == 7) { menu_set_open(0); world_open = 1; }
-        if (!dir && i == 8) { m_page = M_GOAL; m_sel = 0; }
-        if (!dir && i == 9) { m_page = M_MAIN; m_sel = 5; }
+        int o = story_goal() >= 0;   /* the goal line on top */
+        if (!dir && i == o + 0) { m_page = M_GOAL; m_sel = 0; }
+        if (!dir && i == o + 1) { menu_set_open(0); world_open = 1; world_reset_view(); }
+        if (!dir && i == o + 2) { m_page = M_ACH; m_sel = NACH; }
+        if (!dir && i == o + 3) { m_page = M_PLAY; m_sel = 0; }
+        if (!dir && i == o + 4) { m_page = M_MAIN; m_sel = 5; }
+    } else if (m_page == M_PLAY) {
+        if (!dir) { m_page = M_STATS; m_sel = journal_sel(3); }
     } else if (m_page == M_PARTY) {
         if (!dir) { if (i == nitems - 1) { m_page = M_MAIN; m_sel = 4; } else { m_char = i; m_char_from_panel = 0; m_page = M_CHAR; m_sel = 0; } }
     } else if (m_page == M_CHAR) {
         if (!dir) char_card_act(i);
     } else if (m_page == M_GOAL) {
-        if (!dir) { m_page = M_STATS; m_sel = 8; }
+        if (!dir && i == nitems - 2) { menu_set_open(0); world_open = 1; world_reset_view(); world_show_goal(); }
+        else if (!dir) { m_page = M_STATS; m_sel = journal_sel(0); }
     } else if (m_page == M_ACH) {
-        if (!dir && i == NACH) { m_page = M_STATS; m_sel = 6; }
+        if (!dir && i == NACH) { m_page = M_STATS; m_sel = journal_sel(2); }
     } else if (m_page == M_BEST) {
         if (dir || i == m_best_next) { if (m_best_next < 0) return; m_best_page += dir < 0 ? -1 : 1; if (m_best_page < 0) m_best_page = 0; build_menu(); if (m_sel >= nitems) m_sel = nitems - 1; }
         else if (!dir && i == nitems - 1) { m_page = M_MAIN; m_sel = 6; }
@@ -2912,8 +3299,9 @@ static void menu_back(void)
     else if (m_page == M_BEST) { m_page = M_MAIN; m_sel = 6; }
     else if (m_page == M_PARTY) { m_page = M_MAIN; m_sel = 4; }
     else if (m_page == M_CHAR) { if (m_char_from_panel) menu_set_open(0); else { m_page = M_PARTY; m_sel = m_char; } }
-    else if (m_page == M_ACH) { m_page = M_STATS; m_sel = 6; }
-    else if (m_page == M_GOAL) { m_page = M_STATS; m_sel = 8; }
+    else if (m_page == M_ACH) { m_page = M_STATS; m_sel = journal_sel(2); }
+    else if (m_page == M_GOAL) { m_page = M_STATS; m_sel = journal_sel(0); }
+    else if (m_page == M_PLAY) { m_page = M_STATS; m_sel = journal_sel(3); }
     else if (m_page == M_VIDEO || m_page == M_SOUND || m_page == M_SPEED || m_page == M_HINTS || m_page == M_KEYS || m_page == M_PAD) {
         int from = m_page; m_page = M_SET;
         m_sel = from == M_VIDEO ? 0 : from == M_SOUND ? 1 : from == M_SPEED ? 2 : from == M_HINTS ? 3 : from == M_KEYS ? 4 : 5;
@@ -3021,10 +3409,16 @@ static void on_key(int vk, int alt)
     if (launcher_open) { launcher_key(vk); return; }
     if (vk == VK_F1) { menu_set_open(1); m_page = M_HELP; return; }
     if (world_open && (vk == 'N' || vk == VK_ESCAPE)) { world_open = 0; return; }
+    if (world_open) {
+        if (vk == 0xBB || vk == 0x6B) world_zoom_by(1, -1, -1);
+        else if (vk == 0xBD || vk == 0x6D) world_zoom_by(-1, -1, -1);
+        else if (vk == 0x24) world_reset_view();
+        return;
+    }
     if (vk == 'N') {   /* world map screen (unless N is bound to something) */
         int bound = 0;
         for (int a = 0; a < NACT; a++) for (int i = 0; i < NKEY; i++) if (C.keys[a][i] == 'N') bound = 1;
-        if (!bound) { world_open = 1; return; }
+        if (!bound) { world_open = 1; world_reset_view(); return; }
     }
     if (vk == 'M') {   /* minimap: off, small, large (unless M is bound to something) */
         int bound = 0;
@@ -3096,7 +3490,9 @@ static void game_frames(int fast)
     g_hd_track = hd_on() || C.hd_auto;
     emu_set_pad(0, game_pad());
     int frames = fast ? C.turbo_speed : 1;
-    if (!fast && C.battle_speed > 1 && emu_in_battle()) frames = C.battle_speed;
+    /* battle speed-up: not while the game waits for orders ($FF4109 non-zero), or the
+     * cursor in its menus would run away (the round itself is played at speed) */
+    if (!fast && C.battle_speed > 1 && emu_in_battle() && emu_work_ram()[0x4109] == 0) frames = C.battle_speed;
     /* faster text: while a message is being typed out, run several frames per displayed one */
     /* faster walking on field maps: two frames per displayed one, music at its tempo */
     if (!fast && C.fast_walk && frames < 2 && emu_on_field() && emu_game_mode_top() == 0x0C &&
@@ -3110,6 +3506,7 @@ static void game_frames(int fast)
         emu_run_frame();
         if (C.text_speed && emu_text_printing()) text_left = 4;
         frame_no++;
+        turns_track();
         stats_frame();
         cine_update();
         if (C.rewind && (frame_no & 1)) rw_push();
@@ -3163,9 +3560,9 @@ static void sizemove_tick(void)
 static void quickbar_act(int k)
 {
     switch (k) {
-    case 0: menu_set_open(1); m_page = M_STATS; m_sel = 6; break;
+    case 0: menu_set_open(1); m_page = M_STATS; m_sel = journal_sel(0); break;
     case 1: menu_set_open(1); m_page = M_BEST; m_best_page = 0; m_sel = 0; break;
-    case 2: world_open = 1; break;
+    case 2: world_open = 1; world_reset_view(); break;
     case 3: menu_set_open(1); m_page = M_GOAL; m_sel = 0; break;
     case 4: menu_set_open(1); m_page = M_PARTY; m_sel = 0; break;
     case 5: menu_set_open(1); slots_refresh(); m_save_load = 0; m_page = M_SAVE; m_sel = C.slot - 1; break;
@@ -3214,7 +3611,8 @@ static LRESULT wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
     case WM_LBUTTONDOWN:
         if (menu_open && m_wait_bind < 0) { int i = menu_hit(mx, my); if (i >= 0) { m_sel = i; menu_act(0); } }
         else if (launcher_open) { int k = launcher_hit(mx, my); if (k >= 0 && (l_page || l_enabled(k))) launcher_act(k); }
-        else if (!world_open && quickbar_hit(mx, my) >= 0) quickbar_act(quickbar_hit(mx, my));
+        else if (world_open) world_click(mx, my);
+        else if (quickbar_hit(mx, my) >= 0) quickbar_act(quickbar_hit(mx, my));
         else if (!world_open)
             for (int k = 0; k < 5; k++) {   /* a portrait of the party panel: that character's card */
                 int *pr = party_rect[k];
@@ -3231,7 +3629,7 @@ static LRESULT wndproc(HWND h, UINT m, WPARAM w, LPARAM l)
             build_menu();
             int d = (short)((w >> 16) & 0xFFFF);
             menu_step(d > 0 ? -1 : 1);
-        }
+        } else if (world_open) world_zoom_by((short)((w >> 16) & 0xFFFF) > 0 ? 1 : -1, g_mouse_x, g_mouse_y);
         return 0;
     case WM_ENTERSIZEMOVE: in_sizemove = 1; SetTimer(h, 1, 8, 0); return 0;
     case WM_EXITSIZEMOVE: in_sizemove = 0; KillTimer(h, 1); return 0;
@@ -3316,9 +3714,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.44");
+    diag_init(exe_dir, "0.45");
     diag_info = settings_info;
-    logw("start, version 0.44");
+    logw("start, version 0.45");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
@@ -3426,6 +3824,9 @@ static int run(void)
         if (world_open && !launcher_open && !menu_open) {   /* the world map screen pauses the game */
             poll_pads();
             if (ppressed(A_MENU) || ppressed(A_B)) world_open = 0;
+            if (ppressed(A_LEFT)) world_pan(-1, 0); if (ppressed(A_RIGHT)) world_pan(1, 0);
+            if (ppressed(A_UP)) world_pan(0, -1); if (ppressed(A_DOWN)) world_pan(0, 1);
+            if (ppressed(A_A)) world_zoom_by(1, -1, -1); if (ppressed(A_C)) world_zoom_by(-1, -1, -1);
             present();
             Sleep(16);
             pace_reset();

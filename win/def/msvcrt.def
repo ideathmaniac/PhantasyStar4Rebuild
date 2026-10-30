@@ -49,6 +49,7 @@ log
 pow
 sqrt
 floor
+atan2
 strncmp
 strchr
 _strdup

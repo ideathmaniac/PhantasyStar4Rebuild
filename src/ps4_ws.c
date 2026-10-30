@@ -7,7 +7,9 @@
  *   $FFB000  plane B (ground) block map, row stride ($FFEC66)+1
  *   $FF6000  block definitions, 16 tile words (4x4) per block
  * The world map keeps only 32 rows of 128 blocks, as a ring (4 KB).
- * Camera in pixels: $FFEF94 (x), $FFEF90 (y).
+ * Camera in pixels: plane A $FFEF94 (x), $FFEF90 (y); plane B $FFEF9C, $FFEF98
+ * (the vertical blank handler at $000440 writes them to the VDP). Most maps
+ * scroll both alike; some (the Bio-plant...) move plane B at another speed.
  * Tile words: plane A & $BFFF; plane B & $BFFF, or & $1FFF when $FFEC4F != 0
  * (the game's own block writers, $054506 and $054556).
  *
@@ -32,7 +34,8 @@
 static uint8_t snap_maps[0x2000];       /* $FFA000-$FFBFFF */
 static uint16_t snap_blocks[0x1000];    /* $FF6000-$FF7FFF as words */
 static int snap_valid, snap_wa, snap_ha, snap_wb, snap_hb, snap_maskb;
-static int cam_x, cam_y;                /* world position of screen (0,0) this frame */
+static int cam_x, cam_y;                /* world position of screen (0,0) this frame, plane A */
+static int camb_x, camb_y;              /* the same for plane B (it scrolls on its own in some maps) */
 static int battle, battle_mirror;       /* this frame is a battle; its background is one screen wide */
 int ps4_field_live;                     /* last frame showed the field map unobstructed */
 static void fog_mark(void);
@@ -75,7 +78,7 @@ static int verify(const uint8_t *maps, const uint16_t *blocks, int wa, int ha, i
         int w = plane ? wb : wa, h = plane ? hb : ha, mask = plane ? maskb : 0xBFFF;
         for (int ty = 0; ty < 28; ty += 2)
             for (int tx = 0; tx < 40; tx += 2) {
-                int wx = cam_x + tx * 8, wy = cam_y + ty * 8;
+                int wx = (plane ? camb_x : cam_x) + tx * 8, wy = (plane ? camb_y : cam_y) + ty * 8;
                 int exp = map_tile(maps, blocks, plane, w, h, mask, wx, wy);
                 uint32_t ea = (base + ((((wy >> 3) & (ph - 1)) * pw) + ((wx >> 3) & (pw - 1))) * 2) & 0xFFFF;
                 int got = (V.vram[ea] << 8) | V.vram[ea | 1];
@@ -120,10 +123,16 @@ static int ws_classify(void)
         return battle_begin();
     }
     /* world camera, kept consistent with what the VDP is scrolling */
-    int rx = ramw(0xEF94), ry = ramw(0xEF90);
-    int vx = (-plane_hs(1)) & 511, vy = V.vsram[1] & 255;
-    cam_x = rx + ((((vx - rx) % 512) + 512 + 256) % 512 - 256);
-    cam_y = ry + ((((vy - ry) % 256) + 256 + 128) % 256 - 128);
+    {
+        int rx = ramw(0xEF94), ry = ramw(0xEF90);
+        int vx = (-plane_hs(0)) & 511, vy = V.vsram[0] & 255;
+        cam_x = rx + ((((vx - rx) % 512) + 512 + 256) % 512 - 256);
+        cam_y = ry + ((((vy - ry) % 256) + 256 + 128) % 256 - 128);
+        rx = ramw(0xEF9C); ry = ramw(0xEF98);
+        vx = (-plane_hs(1)) & 511; vy = V.vsram[1] & 255;
+        camb_x = rx + ((((vx - rx) % 512) + 512 + 256) % 512 - 256);
+        camb_y = ry + ((((vy - ry) % 256) + 256 + 128) % 256 - 128);
+    }
     ps4_field_live = 0;
     if ((V.reg[11] & 7) != 0) return 0;          /* field maps use full-screen scrolling */
 
@@ -176,7 +185,7 @@ static uint8_t ws_pixel(int plane, int sx, int line)
         if (battle_mirror) sx = sx < 0 ? -1 - sx : 639 - sx;
         return plane_b_pixel(sx, line);
     }
-    int wx = cam_x + sx, wy = cam_y + line;
+    int wx = (plane ? camb_x : cam_x) + sx, wy = (plane ? camb_y : cam_y) + line;
     int t = map_tile(snap_maps, snap_blocks, plane, plane ? snap_wb : snap_wa, plane ? snap_hb : snap_ha,
                      plane ? snap_maskb : 0xBFFF, wx, wy);
     if (t < 0) return 0;
@@ -263,12 +272,12 @@ int ps4_ws_minimap(uint32_t *out, int ow, int oh, int *mx, int *my, int *full_w,
             int wx = x0 + x * 4 + 2, wy = y0 + y * 4 + 2;
             uint32_t c = 0x000000;
             int ta = map_tile(snap_maps, snap_blocks, 0, snap_wa, snap_ha, 0xBFFF, wx, wy);
-            int tb = map_tile(snap_maps, snap_blocks, 1, snap_wb, snap_hb, snap_maskb, wx, wy);
+            int tb = map_tile(snap_maps, snap_blocks, 1, snap_wb, snap_hb, snap_maskb, wx + camb_x - cam_x, wy + camb_y - cam_y);
             if (ta < 0 && tb < 0) { out[y * ow + x] = 0x000000; continue; }
             if (!wraps && !fog_seen(ramw(0xEC28), wx >> 5, wy >> 5)) { out[y * ow + x] = 0x14141E; continue; }
             int op = 0;
             if (ta >= 0) c = tile_pixel(ta, wx & 7, wy & 7, &op);
-            if (!op) { c = bd; if (tb >= 0) { int ob; uint32_t cb = tile_pixel(tb, wx & 7, wy & 7, &ob); if (ob) c = cb; } }
+            if (!op) { c = bd; if (tb >= 0) { int ob; uint32_t cb = tile_pixel(tb, (wx + camb_x - cam_x) & 7, (wy + camb_y - cam_y) & 7, &ob); if (ob) c = cb; } }
             out[y * ow + x] = c;
         }
     *mx = (px - x0) / 4; *my = (py - y0) / 4;
@@ -304,45 +313,120 @@ static void block_colours(world_t *W, int plane, int blk, int mask)
     }
     W->col_ok[plane][blk >> 3] |= (uint8_t)(1 << (blk & 7));
 }
+/* The two planets' maps are kept whole in the ROM, 8 block rows (1 KB) per
+ * piece, behind tables of pointers (the row loader at $053C36 / $053C8C):
+ * Motavia (map 0) 16 pieces, Dezolis (map 1) 8. Read from there, the world
+ * map is whole and exact; what the party has seen is only marked. */
+static const uint32_t WTAB[2][2] = { { 0x107DC2, 0x10BE02 }, { 0x115584, 0x1175C4 } };
+static int world_rom_ok[2] = { -1, -1 };
+static const uint8_t *world_rom_row(int id, int plane, int by)
+{
+    if (id < 0 || id > 1 || world_rom_ok[id] != 1) return 0;
+    uint32_t t = WTAB[id][plane] + (uint32_t)(by >> 3) * 4;
+    uint32_t a = (uint32_t)g_rom[t] << 24 | (uint32_t)g_rom[t + 1] << 16 | (uint32_t)g_rom[t + 2] << 8 | g_rom[t + 3];
+    return g_rom + a + (by & 7) * 128;
+}
+/* the ROM tables are used once the rows the game loaded match them */
+static void world_rom_check(int id, int w, int h)
+{
+    if (id < 0 || id > 1 || world_rom_ok[id] >= 0) return;
+    int pieces = h / 8;
+    if (w != 128 || pieces < 1 || pieces > 16 || g_rom_size < 0x120000) { world_rom_ok[id] = 0; return; }
+    for (int pl = 0; pl < 2; pl++)
+        for (int i = 0; i < pieces; i++) {
+            uint32_t t = WTAB[id][pl] + i * 4;
+            uint32_t a = (uint32_t)g_rom[t] << 24 | (uint32_t)g_rom[t + 1] << 16 | (uint32_t)g_rom[t + 2] << 8 | g_rom[t + 3];
+            if (a < 0x200 || a + 1024 > g_rom_size) { world_rom_ok[id] = 0; return; }
+        }
+    /* compare the rows in view (the camera's) with the ROM */
+    int cy = ramw(0xEF90) >> 5, ring = 4096 / w, same = 0, n = 0;
+    world_rom_ok[id] = 1;
+    for (int by = cy; by < cy + 7 && by < h; by++) {
+        const uint8_t *ra = world_rom_row(id, 0, by);
+        for (int bx = 0; bx < w; bx++, n++) same += snap_maps[((by % ring) * w + bx) & 0xFFF] == ra[bx];
+    }
+    world_rom_ok[id] = n && same * 100 >= n * 97 ? 1 : -1;   /* -1: look again later */
+}
+static int last_world = -1, last_wx = -1, last_wy = -1;
 static void world_capture(void)
 {
     int w = snap_wa, h = snap_ha;
     if (w * h <= 4096 || w > 128 || h > WROWS) return;
-    world_t *W = world_for(ramw(0xEC28), w, h);
+    int id = ramw(0xEC28);
+    world_t *W = world_for(id, w, h);
     if (!W) return;
-    int ring = 4096 / w, py = ramw(0xC034) >> 5;
-    for (int by = py - ring / 2 + 3; by <= py + ring / 2 - 3; by++) {
+    last_world = id; last_wx = ramw(0xC030); last_wy = ramw(0xC034);
+    world_rom_check(id, w, h);
+    /* only the rows on screen are surely loaded (the ring keeps older rows) */
+    int ring = 4096 / w, cy = ramw(0xEF90) >> 5;
+    for (int by = cy - 1; by <= cy + 8; by++) {
         if (by < 0 || by >= h) continue;
         int r = by % ring;
         for (int bx = 0; bx < w; bx++) {
             int a = snap_maps[(r * w + bx) & 0xFFF], b = snap_maps[0x1000 + ((r * w + bx) & 0xFFF)];
             W->blk[0][by][bx] = (uint8_t)a; W->blk[1][by][bx] = (uint8_t)b;
-            block_colours(W, 0, a, 0xBFFF); block_colours(W, 1, b, snap_maskb);
             W->known[by][bx >> 3] |= (uint8_t)(1 << (bx & 7));
         }
     }
+    /* the planet's whole set of blocks is in memory: colour them all once */
+    for (int k = 0; k < 256; k++) { block_colours(W, 0, k, 0xBFFF); block_colours(W, 1, k, snap_maskb); }
 }
-/* the whole world map, one pixel per tile (w*4 x h*4); 0 if this map is not a world map */
+/* the whole world map, one pixel per tile (w*4 x h*4): the planet the party
+ * is on, or the last one visited; unexplored parts darker. *px < 0: the
+ * party is not on it. 0 if no planet map is known */
 int ps4_world_image(uint32_t *out, int maxw, int maxh, int *ow, int *oh, int *px, int *py)
 {
-    int id = ramw(0xEC28);
+    int id = ramw(0xEC28), here = 1;
     world_t *W = 0;
     for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == id) W = &worlds[i];
+    if (!W) {
+        here = 0;
+        for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == last_world) W = &worlds[i];
+        for (int i = 0; i < WORLDS && !W; i++) if (worlds[i].w) W = &worlds[i];
+    }
     if (!W || W->w * 4 > maxw || W->h * 4 > maxh) return 0;
     *ow = W->w * 4; *oh = W->h * 4;
-    for (int by = 0; by < W->h; by++)
+    for (int by = 0; by < W->h; by++) {
+        const uint8_t *ra = world_rom_row(W->id, 0, by), *rb = world_rom_row(W->id, 1, by);
         for (int bx = 0; bx < W->w; bx++) {
             int k = (W->known[by][bx >> 3] >> (bx & 7)) & 1;
+            int ba = ra ? ra[bx] : W->blk[0][by][bx], bb = rb ? rb[bx] : W->blk[1][by][bx];
+            int okb = (W->col_ok[1][bb >> 3] >> (bb & 7)) & 1, oka = (W->col_ok[0][ba >> 3] >> (ba & 7)) & 1;
             for (int t = 0; t < 16; t++) {
                 uint32_t c = 0x10101A;
-                if (k) {
-                    uint32_t a = W->col[0][W->blk[0][by][bx]][t];
-                    c = (a & 0x80000000u) ? a & 0xFFFFFF : W->col[1][W->blk[1][by][bx]][t] & 0xFFFFFF;
+                if (k || ra) {
+                    uint32_t a = oka ? W->col[0][ba][t] : 0;
+                    c = (a & 0x80000000u) ? a & 0xFFFFFF : okb ? W->col[1][bb][t] & 0xFFFFFF : 0x10101A;
+                    if (!k) c = ((c >> 2) & 0x3F3F3F) + ((c >> 3) & 0x1F1F1F) + 0x0A0A12;   /* not seen yet: dim */
                 }
                 out[(by * 4 + t / 4) * *ow + bx * 4 + (t & 3)] = c;
             }
         }
-    *px = ramw(0xC030) / 8; *py = ramw(0xC034) / 8;
-    return 1;
+    }
+    if (here) { *px = ramw(0xC030) / 8; *py = ramw(0xC034) / 8; }
+    else if (W->id == last_world && last_wx >= 0) { *px = last_wx / 8; *py = last_wy / 8; }
+    else *px = *py = -1;
+    return W->id + 1;
+}
+/* towns on a planet's map, from the game's table of places (ROM $061260:
+ * place number, map, x, y in tiles, 8 bytes each). Place numbers are those
+ * of the game's list of names. Motavia: the places before the first on
+ * Dezolis (Храм Раджа, 24). */
+int ps4_world_towns(int world, int *place, int *tx, int *ty, int max)
+{
+    static const uint8_t sig[8] = { 0x00, 0x00, 0x00, 0x10, 0x00, 0x5C, 0x01, 0x1E };
+    const uint32_t T = 0x061260;
+    if (g_rom_size < T + 8 * 40 || memcmp(g_rom + T, sig, 8)) return 0;
+    int n = 0, planet = 0;
+    for (int i = 0; i < 40 && n < max; i++) {
+        const uint8_t *e = g_rom + T + i * 8;
+        int pl = e[0], x = e[4] << 8 | e[5], y = e[6] << 8 | e[7];
+        if (!x && !y) break;
+        if (pl == 24) planet = 1;
+        if (pl == 45) planet = 2;   /* Rykros: not a map we keep */
+        if (planet != world) continue;
+        place[n] = pl; tx[n] = x; ty[n] = y; n++;
+    }
+    return n;
 }
 uint8_t *ps4_world_data(int *size) { *size = sizeof worlds; return (uint8_t *)worlds; }

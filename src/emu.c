@@ -155,7 +155,12 @@ const uint8_t *emu_work_ram(void) { return g_ram; }
 int emu_world_image(uint32_t *out, int maxw, int maxh, int *w, int *h, int *px, int *py)
 {
     int ps4_world_image(uint32_t *out, int maxw, int maxh, int *ow, int *oh, int *px, int *py);
-    return rom_kind == EMU_ROM_RECOMPILED && ps4_world_image(out, maxw, maxh, w, h, px, py);
+    return rom_kind == EMU_ROM_RECOMPILED ? ps4_world_image(out, maxw, maxh, w, h, px, py) : 0;
+}
+int emu_world_towns(int world, int *place, int *tx, int *ty, int max)
+{
+    int ps4_world_towns(int, int *, int *, int *, int);
+    return rom_kind == EMU_ROM_RECOMPILED ? ps4_world_towns(world, place, tx, ty, max) : 0;
 }
 uint8_t *emu_world_data(int *size) { uint8_t *ps4_world_data(int *size); return ps4_world_data(size); }
 void emu_set_fog(int on) { extern int g_fog_on; g_fog_on = on; }
