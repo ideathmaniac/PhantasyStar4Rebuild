@@ -32,6 +32,20 @@
 #include "md.h"
 
 static uint8_t snap_maps[0x2000];       /* $FFA000-$FFBFFF */
+/* the tile patterns of the last clear frame: the game's menus load their
+ * own graphics over some of the map's tiles, which would show as squares
+ * at the sides while a menu is open */
+static uint8_t snap_vram[0x10000];
+static uint8_t snap_tile_pixel(uint16_t ent, int px, int py)
+{
+    int tile = ent & 0x7FF;
+    if (ent & 0x0800) px = 7 - px;
+    if (ent & 0x1000) py = 7 - py;
+    uint8_t b = snap_vram[(tile * 32 + py * 4 + (px >> 1)) & 0xFFFF];
+    int c = (px & 1) ? (b & 15) : (b >> 4);
+    if (!c) return 0;
+    return (uint8_t)(((ent >> 8) & 0x80) | (((ent >> 13) & 3) << 4) | c);
+}
 static uint16_t snap_blocks[0x1000];    /* $FF6000-$FF7FFF as words */
 static int snap_valid, snap_wa, snap_ha, snap_wb, snap_hb, snap_maskb;
 static int cam_x, cam_y;                /* world position of screen (0,0) this frame, plane A */
@@ -149,6 +163,7 @@ static int ws_classify(void)
         memcpy(snap_maps, &g_ram[0xA000], sizeof snap_maps);
         memcpy(snap_blocks, live_blocks, sizeof snap_blocks);
         snap_wa = wa; snap_ha = ha; snap_wb = wb; snap_hb = hb; snap_maskb = maskb;
+        memcpy(snap_vram, V.vram, sizeof snap_vram);
         snap_valid = 1;
         fog_mark();
         world_capture();
@@ -190,7 +205,7 @@ static uint8_t ws_pixel(int plane, int sx, int line)
                      plane ? snap_maskb : 0xBFFF, wx, wy);
     if (t < 0) return 0;
     if (g_hd_track) g_ws_src = vdp_make_src((uint16_t)t, wx & 7, wy & 7);
-    return vdp_tile_pixel((uint16_t)t, wx & 7, wy & 7);
+    return ps4_field_live ? vdp_tile_pixel((uint16_t)t, wx & 7, wy & 7) : snap_tile_pixel((uint16_t)t, wx & 7, wy & 7);
 }
 
 /* The game culls sprite pieces outside the 320-pixel view; widen the test
@@ -428,5 +443,19 @@ int ps4_world_towns(int world, int *place, int *tx, int *ty, int max)
         place[n] = pl; tx[n] = x; ty[n] = y; n++;
     }
     return n;
+}
+/* the place (the game's place number) whose town map this is, -1 if none:
+ * the place table's second word is the town's map */
+int ps4_place_of_map(int map)
+{
+    static const uint8_t sig[8] = { 0x00, 0x00, 0x00, 0x10, 0x00, 0x5C, 0x01, 0x1E };
+    const uint32_t T = 0x061260;
+    if (g_rom_size < T + 8 * 40 || memcmp(g_rom + T, sig, 8)) return -1;
+    for (int i = 0; i < 40; i++) {
+        const uint8_t *e = g_rom + T + i * 8;
+        if (!(e[4] | e[5] | e[6] | e[7])) break;
+        if ((e[2] << 8 | e[3]) == map) return e[0];
+    }
+    return -1;
 }
 uint8_t *ps4_world_data(int *size) { *size = sizeof worlds; return (uint8_t *)worlds; }

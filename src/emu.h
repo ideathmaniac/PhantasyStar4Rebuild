@@ -64,6 +64,8 @@ uint8_t *emu_world_data(int *size);   /* to keep in a file */
 void emu_set_fog(int on);              /* minimap shows only the blocks seen so far */
 uint8_t *emu_fog_data(int *size);      /* the seen blocks of every map, to keep in a file */   /* the 64 KB work RAM ($FF0000) */
 #include "bestiary.h"
+int  emu_place_of_map(int map);         /* the town (place number) of a map, -1 if none */
+int  emu_known_rom(void);              /* the ROM the helpers know (bestiary, shops, maps) */
 int  emu_bestiary(int id, best_info_t *b);   /* monster id 0..BEST_MAX-1: data and counts, 0 if none */
 int  emu_shop(struct shop_s *s);       /* shop buy list: the highlighted item compared with the party (shop.h) */
 int  emu_skill_tip(struct tip_s *t);  /* technique / skill under the cursor of an open list (tips.h) */

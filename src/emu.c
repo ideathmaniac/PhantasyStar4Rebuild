@@ -170,6 +170,8 @@ int emu_minimap(uint32_t *out, int w, int h, int *mx, int *my)
     int ps4_ws_minimap(uint32_t *out, int ow, int oh, int *mx, int *my, int *fw, int *fh);
     return rom_kind == EMU_ROM_RECOMPILED ? ps4_ws_minimap(out, w, h, mx, my, 0, 0) : 0;
 }
+int emu_place_of_map(int map) { int ps4_place_of_map(int); return rom_kind == EMU_ROM_RECOMPILED ? ps4_place_of_map(map) : -1; }
+int emu_known_rom(void) { return rom_kind == EMU_ROM_RECOMPILED; }
 int emu_bestiary(int id, best_info_t *b) { return rom_kind == EMU_ROM_RECOMPILED && bestiary_info(id, b); }
 int emu_shop(shop_t *s) { return rom_kind == EMU_ROM_RECOMPILED && (shop_current(s) || shop_inventory(s) || shop_battle_item(s)); }
 int emu_skill_tip(tip_t *t) { return rom_kind == EMU_ROM_RECOMPILED && tips_current(t); }

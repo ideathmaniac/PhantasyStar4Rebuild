@@ -256,3 +256,24 @@ int shop_battle_item(shop_t *s)
     s->battle = 1;
     return 1;
 }
+
+/* the shops' item lists: FF-separated lists at ROM $0682A6, numbered by
+ * the shop id at $FFECD1 (the buy list is taken from there, $0650E4) */
+#define SHOP_LISTS 0x0682A6
+int shop_list_items(int shop, int *ids, int max)
+{
+    static const uint8_t sig[8] = { 0x7D, 0xFF, 0x01, 0x02, 0x08, 0x03, 0x09, 0xFF };
+    if (g_rom_size < SHOP_LISTS + 0x400 || memcmp(g_rom + SHOP_LISTS, sig, 8) || shop < 0 || shop > 120) return 0;
+    uint32_t a = SHOP_LISTS;
+    for (int k = 0; k < shop; k++) { while (a < g_rom_size && g_rom[a] != 0xFF) a++; a++; }
+    int n = 0;
+    while (a < g_rom_size && g_rom[a] != 0xFF && n < max) { int id = g_rom[a++]; if (id >= 1 && id <= NITEMS) ids[n++] = id; }
+    return n;
+}
+/* the shop whose buy list is open, -1 if none */
+int shop_open_id(void)
+{
+    shop_t s;
+    return shop_current(&s) ? g_ram[0xECD1] : -1;
+}
+void shop_item_name(int id, char *out, int n) { item_name(id, out, n); }

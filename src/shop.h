@@ -29,4 +29,10 @@ int shop_battle_item(shop_t *s);
 /* any item by id (comparison rows for the current party) */
 int shop_item(int id, shop_t *s);
 
+/* the item ids of a shop (the game's shop number), 0 if unknown */
+int shop_list_items(int shop, int *ids, int max);
+/* the shop whose buy list is open now, -1 if none */
+int shop_open_id(void);
+void shop_item_name(int id, char *out, int n);
+
 #endif
