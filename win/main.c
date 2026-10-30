@@ -27,7 +27,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.46"
+#define APP_VERSION_W L"v0.47"
 #define APP_TITLE L"Phantasy Star IV: The End of the Millennium"
 #define GAME_NAME L"Phantasy Star IV: The End of the Millennium"
 
@@ -1225,7 +1225,7 @@ static void present(void)
         if (C.party_hud) draw_party(x, y, w, h);
         if (C.quickbar) draw_quickbar(y, h);
     }
-    if (!launcher_open) draw_ach_toast();
+    if (!launcher_open && !world_open) draw_ach_toast();
     if (!launcher_open) draw_fps();
     if (menu_open || status_msg[0]) {
         int lr[4]; memcpy(lr, menu_rect, sizeof lr);
@@ -1550,6 +1550,9 @@ static int wbtn[4][4];          /* the zoom in / out / to the party / close butt
 static int world_view[6];       /* x0, y0, dw, dh of the map on screen; source x, y */
 static double world_scale;
 static void world_reset_view(void) { world_zoom = 1; world_cx = world_cy = -1; }
+static void world_open_map(void) { world_open = 1; world_reset_view(); emu_world_pick(-1); }
+static int ptab[3][4];   /* the planet tabs on the map screen */
+static void world_pick(int planet) { if (emu_world_known(planet)) { emu_world_pick(planet); world_reset_view(); } }
 static void world_zoom_by(int d, int at_x, int at_y)
 {
     int z = world_zoom;
@@ -1561,6 +1564,8 @@ static void world_zoom_by(int d, int at_x, int at_y)
 }
 static void world_click(int x, int y)
 {
+    for (int k = 0; k < 3; k++)
+        if (ptab[k][2] && x >= ptab[k][0] && x < ptab[k][0] + ptab[k][2] && y >= ptab[k][1] && y < ptab[k][1] + ptab[k][3]) { world_pick(k); return; }
     for (int k = 0; k < 4; k++)
         if (x >= wbtn[k][0] && x < wbtn[k][0] + wbtn[k][2] && y >= wbtn[k][1] && y < wbtn[k][1] + wbtn[k][3]) {
             if (k == 0) world_zoom_by(1, -1, -1); else if (k == 1) world_zoom_by(-1, -1, -1); else if (k == 2) world_reset_view(); else world_open = 0;
@@ -1657,10 +1662,24 @@ static void draw_world(int cw, int ch)
 #undef WX
 #undef WY
 #undef WIN
-    static const wchar_t *pn[2] = { L"Мотавия", L"Дезолис" };
-    wchar_t t[200];
-    _snwprintf(t, 199, L"Карта мира: %ls%ls", planet < 2 ? pn[planet] : L"", mx < 0 ? L" (отряд не на этой карте)" : L""); t[199] = 0;
-    draw_text(font_h, font_h / 2, t, RGBC(255, 240, 180), font_big ? font_big : font_small);
+    static const wchar_t *pn[3] = { L"Мотавия", L"Дезолис", L"Рикрос" };
+    {   /* the title, then a tab for each planet seen (click, or keys 1-3) */
+        HGDIOBJ fb = font_big ? font_big : font_small;
+        int x = font_h, y = font_h / 2;
+        draw_text(x, y, L"Карта мира:", RGBC(255, 240, 180), fb);
+        x += text_w(L"Карта мира:", fb) + font_h / 2;
+        for (int k = 0; k < 3; k++) {
+            ptab[k][2] = 0;
+            if (!emu_world_known(k)) continue;
+            int tw = text_w(pn[k], fb) + font_h, th = font_h * 5 / 4 + 2, on = k == planet;
+            int hov = g_mouse_x >= x && g_mouse_x < x + tw && g_mouse_y >= y - 2 && g_mouse_y < y - 2 + th;
+            fill(x, y - 2, tw, th, on ? RGBC(214, 176, 92) : hov ? RGBC(70, 96, 170) : RGBC(28, 34, 70));
+            draw_text(x + font_h / 2, y, pn[k], on ? RGBC(20, 20, 30) : RGBC(225, 230, 255), fb);
+            ptab[k][0] = x; ptab[k][1] = y - 2; ptab[k][2] = tw; ptab[k][3] = th;
+            x += tw + font_h / 3;
+        }
+        if (mx < 0) draw_text(x + font_h / 2, y + 2, L"отряд не на этой карте", RGBC(170, 180, 220), font_small);
+    }
     {   /* the legend and the controls */
         int lx = font_h, ly = ch - bot + font_h / 3, q = font_h * 2 / 3;
         static const struct { DWORD c; const wchar_t *t; } L[3] = {
@@ -1671,7 +1690,7 @@ static void draw_world(int cw, int ch)
             lx += q + font_h / 3 + text_w(L[k].t, font_small) + font_h;
         }
         draw_text(lx, ly, L"тёмное — ещё не пройдено", RGBC(150, 156, 190), font_small);
-        draw_text(font_h, ly + font_h, L"Щелчок — приблизить туда · колесо, +/−, A/C — масштаб · стрелки — сдвиг · N или Esc — закрыть",
+        draw_text(font_h, ly + font_h, L"Щелчок — приблизить · колесо, +/− — масштаб · стрелки — сдвиг · 1–3 — планета · Esc — закрыть",
                   RGBC(150, 156, 190), font_small);
     }
     /* buttons: + − and back to the party */
@@ -3375,7 +3394,7 @@ static void menu_act(int dir)
         int o = story_goal() >= 0;   /* the goal line on top */
         if (!dir && i == o + 0) { m_page = M_GOAL; m_sel = 0; }
         if (!dir && i == o + 1) { m_page = M_GEAR; m_sel = 0; }
-        if (!dir && i == o + 2) { menu_set_open(0); world_open = 1; world_reset_view(); }
+        if (!dir && i == o + 2) { menu_set_open(0); world_open_map(); }
         if (!dir && i == o + 3) { m_page = M_ACH; m_sel = NACH; }
         if (!dir && i == o + 4) { m_page = M_PLAY; m_sel = 0; }
         if (!dir && i == o + 5) { m_page = M_MAIN; m_sel = 5; }
@@ -3388,7 +3407,7 @@ static void menu_act(int dir)
     } else if (m_page == M_CHAR) {
         if (!dir) char_card_act(i);
     } else if (m_page == M_GOAL) {
-        if (!dir && i == nitems - 2) { menu_set_open(0); world_open = 1; world_reset_view(); world_show_goal(); }
+        if (!dir && i == nitems - 2) { menu_set_open(0); world_open_map(); world_show_goal(); }
         else if (!dir) { m_page = M_STATS; m_sel = journal_sel(0); }
     } else if (m_page == M_ACH) {
         if (!dir && i == NACH) { m_page = M_STATS; m_sel = journal_sel(3); }
@@ -3554,12 +3573,13 @@ static void on_key(int vk, int alt)
         if (vk == 0xBB || vk == 0x6B) world_zoom_by(1, -1, -1);
         else if (vk == 0xBD || vk == 0x6D) world_zoom_by(-1, -1, -1);
         else if (vk == 0x24) world_reset_view();
+        else if (vk >= '1' && vk <= '3') world_pick(vk - '1');
         return;
     }
     if (vk == 'N') {   /* world map screen (unless N is bound to something) */
         int bound = 0;
         for (int a = 0; a < NACT; a++) for (int i = 0; i < NKEY; i++) if (C.keys[a][i] == 'N') bound = 1;
-        if (!bound) { world_open = 1; world_reset_view(); return; }
+        if (!bound) { world_open_map(); return; }
     }
     if (vk == 'M') {   /* minimap: off, small, large (unless M is bound to something) */
         int bound = 0;
@@ -3704,7 +3724,7 @@ static void quickbar_act(int k)
     switch (k) {
     case 0: menu_set_open(1); m_page = M_STATS; m_sel = journal_sel(0); break;
     case 1: menu_set_open(1); m_page = M_BEST; m_best_page = 0; m_sel = 0; break;
-    case 2: world_open = 1; world_reset_view(); break;
+    case 2: world_open_map(); break;
     case 3: menu_set_open(1); m_page = M_GOAL; m_sel = 0; break;
     case 4: menu_set_open(1); m_page = M_PARTY; m_sel = 0; break;
     case 5: menu_set_open(1); slots_refresh(); m_save_load = 0; m_page = M_SAVE; m_sel = C.slot - 1; break;
@@ -3856,9 +3876,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.46");
+    diag_init(exe_dir, "0.47");
     diag_info = settings_info;
-    logw("start, version 0.46");
+    logw("start, version 0.47");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {
@@ -3969,6 +3989,7 @@ static int run(void)
             if (ppressed(A_LEFT)) world_pan(-1, 0); if (ppressed(A_RIGHT)) world_pan(1, 0);
             if (ppressed(A_UP)) world_pan(0, -1); if (ppressed(A_DOWN)) world_pan(0, 1);
             if (ppressed(A_A)) world_zoom_by(1, -1, -1); if (ppressed(A_C)) world_zoom_by(-1, -1, -1);
+            if (ppressed(A_START)) for (int k = 1; k <= 3; k++) { int pl = (world_planet + k) % 3; if (emu_world_known(pl)) { world_pick(pl); break; } }
             present();
             Sleep(16);
             pace_reset();

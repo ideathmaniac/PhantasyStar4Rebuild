@@ -336,7 +336,17 @@ static const uint32_t WTAB[2][2] = { { 0x107DC2, 0x10BE02 }, { 0x115584, 0x1175C
 static int world_rom_ok[2] = { -1, -1 };
 static const uint8_t *world_rom_row(int id, int plane, int by)
 {
-    if (id < 0 || id > 1 || world_rom_ok[id] != 1) return 0;
+    if (id < 0 || id > 1) return 0;
+    if (world_rom_ok[id] < 0) {   /* not checked against the game yet: the known ROM's tables are trusted */
+        static const uint32_t first[2][2] = { { 0x107E02, 0x10BE42 }, { 0x1155C4, 0x117604 } };
+        int ok = g_rom_size >= 0x120000;
+        for (int pl = 0; pl < 2 && ok; pl++) {
+            uint32_t t = WTAB[id][pl];
+            ok = ((uint32_t)g_rom[t] << 24 | (uint32_t)g_rom[t + 1] << 16 | (uint32_t)g_rom[t + 2] << 8 | g_rom[t + 3]) == first[id][pl];
+        }
+        if (ok) world_rom_ok[id] = 1;
+    }
+    if (world_rom_ok[id] != 1) return 0;
     uint32_t t = WTAB[id][plane] + (uint32_t)(by >> 3) * 4;
     uint32_t a = (uint32_t)g_rom[t] << 24 | (uint32_t)g_rom[t + 1] << 16 | (uint32_t)g_rom[t + 2] << 8 | g_rom[t + 3];
     return g_rom + a + (by & 7) * 128;
@@ -365,15 +375,16 @@ static void world_rom_check(int id, int w, int h)
 static int last_world = -1, last_wx = -1, last_wy = -1;
 static void world_capture(void)
 {
-    int w = snap_wa, h = snap_ha;
-    if (w * h <= 4096 || w > 128 || h > WROWS) return;
-    int id = ramw(0xEC28);
+    int w = snap_wa, h = snap_ha, id = ramw(0xEC28);
+    /* the planets: Motavia 0 and Dezolis 1 (wrapping, streamed), Rykros 2 (whole in memory) */
+    if (id > 2 || w > 128 || h > WROWS) return;
+    int wraps = w * h > 4096;
     world_t *W = world_for(id, w, h);
     if (!W) return;
     last_world = id; last_wx = ramw(0xC030); last_wy = ramw(0xC034);
-    world_rom_check(id, w, h);
+    if (wraps) world_rom_check(id, w, h);
     /* only the rows on screen are surely loaded (the ring keeps older rows) */
-    int ring = 4096 / w, cy = ramw(0xEF90) >> 5;
+    int ring = wraps ? 4096 / w : h, cy = ramw(0xEF90) >> 5;
     for (int by = cy - 1; by <= cy + 8; by++) {
         if (by < 0 || by >= h) continue;
         int r = by % ring;
@@ -386,6 +397,9 @@ static void world_capture(void)
     /* the planet's whole set of blocks is in memory: colour them all once */
     for (int k = 0; k < 256; k++) { block_colours(W, 0, k, 0xBFFF); block_colours(W, 1, k, snap_maskb); }
 }
+int ps4_world_pick = -1;   /* the planet to show, -1: where the party is */
+/* 1 if that planet's map has been seen */
+int ps4_world_known(int planet) { for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == planet) return 1; return 0; }
 /* the whole world map, one pixel per tile (w*4 x h*4): the planet the party
  * is on, or the last one visited; unexplored parts darker. *px < 0: the
  * party is not on it. 0 if no planet map is known */
@@ -393,15 +407,27 @@ int ps4_world_image(uint32_t *out, int maxw, int maxh, int *ow, int *oh, int *px
 {
     int id = ramw(0xEC28), here = 1;
     world_t *W = 0;
-    for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == id) W = &worlds[i];
+    if (ps4_world_pick >= 0 && ps4_world_pick != id) {   /* another planet chosen on the map screen */
+        for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == ps4_world_pick) W = &worlds[i];
+        if (W) here = 0;
+    }
+    if (!W) for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == id) W = &worlds[i];
     if (!W) {
         here = 0;
         for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == last_world) W = &worlds[i];
         for (int i = 0; i < WORLDS && !W; i++) if (worlds[i].w) W = &worlds[i];
     }
     if (!W || W->w * 4 > maxw || W->h * 4 > maxh) return 0;
-    *ow = W->w * 4; *oh = W->h * 4;
-    for (int by = 0; by < W->h; by++) {
+    int H = W->h;
+    if (W->id <= 1) world_rom_row(W->id, 0, 0);
+    if (W->id <= 1 && world_rom_ok[W->id] == 1) {   /* Dezolis: the last pieces of its table repeat one of sea, not shown */
+        uint32_t t = WTAB[W->id][1];
+        int pieces = W->h / 8, k = pieces - 1;
+        while (k > 0 && !memcmp(g_rom + t + (k - 1) * 4, g_rom + t + k * 4, 4)) k--;
+        if (pieces - k >= 3) H = k * 8;
+    }
+    *ow = W->w * 4; *oh = H * 4;
+    for (int by = 0; by < H; by++) {
         const uint8_t *ra = world_rom_row(W->id, 0, by), *rb = world_rom_row(W->id, 1, by);
         for (int bx = 0; bx < W->w; bx++) {
             int k = (W->known[by][bx >> 3] >> (bx & 7)) & 1;
@@ -421,6 +447,7 @@ int ps4_world_image(uint32_t *out, int maxw, int maxh, int *ow, int *oh, int *px
     if (here) { *px = ramw(0xC030) / 8; *py = ramw(0xC034) / 8; }
     else if (W->id == last_world && last_wx >= 0) { *px = last_wx / 8; *py = last_wy / 8; }
     else *px = *py = -1;
+    if (*py >= H * 4) *px = *py = -1;
     return W->id + 1;
 }
 /* towns on a planet's map, from the game's table of places (ROM $061260:

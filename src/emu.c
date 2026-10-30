@@ -157,6 +157,8 @@ int emu_world_image(uint32_t *out, int maxw, int maxh, int *w, int *h, int *px, 
     int ps4_world_image(uint32_t *out, int maxw, int maxh, int *ow, int *oh, int *px, int *py);
     return rom_kind == EMU_ROM_RECOMPILED ? ps4_world_image(out, maxw, maxh, w, h, px, py) : 0;
 }
+void emu_world_pick(int planet) { extern int ps4_world_pick; ps4_world_pick = planet; }
+int emu_world_known(int planet) { int ps4_world_known(int); return rom_kind == EMU_ROM_RECOMPILED && ps4_world_known(planet); }
 int emu_world_towns(int world, int *place, int *tx, int *ty, int max)
 {
     int ps4_world_towns(int, int *, int *, int *, int);
