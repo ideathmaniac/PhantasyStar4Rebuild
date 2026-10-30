@@ -180,6 +180,7 @@ static inline uint32_t cram_rgb(int idx, int lvl)
 }
 
 int32_t g_ws_ext;
+int g_ws_side_sprites = 1;   /* 0: no sprites in the widened columns this frame */
 int g_ws_frame_ext;
 int (*g_ws_begin)(void);
 uint8_t (*g_ws_pixel)(int plane, int sx, int line);
@@ -280,6 +281,7 @@ static void draw_sprites(uint8_t *out, int line, int W, int E)
                     int sx = x + c * 8 + p;
                     if (++pix > max_px * 2) break;
                     if (sx < -E || sx >= W + E || out[sx + E]) continue;
+                    if (!g_ws_side_sprites && (sx < 0 || sx >= W)) continue;
                     int tp = (at & 0x0800) ? 7 - p : p;
                     uint8_t px = tile_pixel((uint16_t)(ent & ~0x1800), tp, row & 7);
                     if (px) {

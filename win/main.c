@@ -27,7 +27,7 @@
 
 int _fltused = 0x9875;
 
-#define APP_VERSION_W L"v0.48"
+#define APP_VERSION_W L"v0.49"
 #define APP_TITLE L"Phantasy Star IV: The End of the Millennium"
 #define GAME_NAME L"Phantasy Star IV: The End of the Millennium"
 
@@ -3876,9 +3876,9 @@ static int run(void)
     GetModuleFileNameW(0, exe_dir, 599);
     wchar_t *sl = wcsrchr(exe_dir, L'\\');
     if (sl) sl[1] = 0; else exe_dir[0] = 0;
-    diag_init(exe_dir, "0.48");
+    diag_init(exe_dir, "0.49");
     diag_info = settings_info;
-    logw("start, version 0.48");
+    logw("start, version 0.49");
     /* another copy still running (for example stuck after a crash) */
     CreateMutexW(0, 0, L"PS4Recomp.single");
     if (GetLastError() == 183 /* ERROR_ALREADY_EXISTS */) {

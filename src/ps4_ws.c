@@ -35,7 +35,14 @@ static uint8_t snap_maps[0x2000];       /* $FFA000-$FFBFFF */
 /* the tile patterns of the last clear frame: the game's menus load their
  * own graphics over some of the map's tiles, which would show as squares
  * at the sides while a menu is open */
-static uint8_t snap_vram[0x10000];
+static uint8_t snap_vram[0x10000], vram_cand[0x10000];
+static uint16_t snap_cram[64], cram_cand[64];
+/* the maps too: the game starts writing a menu into map memory while the field still checks as clear */
+static uint8_t maps_cand[0x2000], maps_good[0x2000];
+static uint16_t blocks_cand[0x1000], blocks_good[0x1000];
+static int maps_good_ok, maps_restored;
+static uint8_t pal_map[256];   /* the snapshot's colour index -> the nearest index in today's palette */
+static int vram_streak, vram_cand_ok, vram_snap_ok;
 static uint8_t snap_tile_pixel(uint16_t ent, int px, int py)
 {
     int tile = ent & 0x7FF;
@@ -49,7 +56,7 @@ static uint8_t snap_tile_pixel(uint16_t ent, int px, int py)
 static uint16_t snap_blocks[0x1000];    /* $FF6000-$FF7FFF as words */
 static int snap_valid, snap_wa, snap_ha, snap_wb, snap_hb, snap_maskb;
 static int cam_x, cam_y;                /* world position of screen (0,0) this frame, plane A */
-static int camb_x, camb_y;              /* the same for plane B (it scrolls on its own in some maps) */
+static int camb_x, camb_y, snap_cam[4];              /* the same for plane B (it scrolls on its own in some maps) */
 static int battle, battle_mirror;       /* this frame is a battle; its background is one screen wide */
 int ps4_field_live;                     /* last frame showed the field map unobstructed */
 static void fog_mark(void);
@@ -119,9 +126,13 @@ static int battle_begin(void)
 }
 
 static int ws_classify(void);
+static uint8_t ws_pixel(int plane, int sx, int line);
 static int ws_begin(void)
 {
     int r = ws_classify();
+    /* while a menu or a dialog covers the field the game parks the objects it hides
+     * just outside the 320-pixel view, which the wider picture would show at the sides */
+    g_ws_side_sprites = battle || ps4_field_live;
     g_ws_cutscene = !battle && !r && !ps4_field_live_any;
     return r;
 }
@@ -163,13 +174,45 @@ static int ws_classify(void)
         memcpy(snap_maps, &g_ram[0xA000], sizeof snap_maps);
         memcpy(snap_blocks, live_blocks, sizeof snap_blocks);
         snap_wa = wa; snap_ha = ha; snap_wb = wb; snap_hb = hb; snap_maskb = maskb;
-        memcpy(snap_vram, V.vram, sizeof snap_vram);
+        /* the tile patterns are kept with a delay: the game loads a menu's graphics a
+         * few frames before its window covers the field, so a copy counts only once
+         * 16 more clear frames have followed it */
+        { static int last_map = -1; int mp = ramw(0xEC28); if (mp != last_map) { last_map = mp; vram_snap_ok = 0; vram_cand_ok = 0; vram_streak = 0; maps_good_ok = 0; } }
+        if (++vram_streak % 16 == 0) {
+            if (vram_cand_ok) { memcpy(snap_vram, vram_cand, sizeof snap_vram); memcpy(snap_cram, cram_cand, sizeof snap_cram);
+                                memcpy(maps_good, maps_cand, sizeof maps_good); memcpy(blocks_good, blocks_cand, sizeof blocks_good); maps_good_ok = 1; }
+            memcpy(vram_cand, V.vram, sizeof vram_cand); memcpy(cram_cand, V.cram, sizeof cram_cand); vram_cand_ok = 1;
+            memcpy(maps_cand, snap_maps, sizeof maps_cand); memcpy(blocks_cand, snap_blocks, sizeof blocks_cand);
+            if (!vram_snap_ok) { memcpy(snap_vram, V.vram, sizeof snap_vram); memcpy(snap_cram, V.cram, sizeof snap_cram); vram_snap_ok = 1; }
+        }
+        snap_cam[0] = cam_x; snap_cam[1] = cam_y; snap_cam[2] = camb_x; snap_cam[3] = camb_y;
+        maps_restored = 0;
         snap_valid = 1;
         fog_mark();
         world_capture();
         return 1;
     }
+    vram_streak = 0; vram_cand_ok = 0;
     if (!snap_valid) return 0;
+    if (!maps_restored && maps_good_ok) { memcpy(snap_maps, maps_good, sizeof snap_maps); memcpy(snap_blocks, blocks_good, sizeof snap_blocks); }
+    maps_restored = 1;
+    /* a menu over the field is drawn on plane A, whose scrolling the game may
+     * change for it: the field stays where it was on the last clear frame */
+    cam_x = snap_cam[0]; cam_y = snap_cam[1]; camb_x = snap_cam[2]; camb_y = snap_cam[3];
+    /* menus also bring their own colours (a palette line the field uses only
+     * off screen): the sides keep the field's colours, as near as today's
+     * palette has them */
+    if (vram_snap_ok)
+        for (int i = 0; i < 64; i++) {
+            int c = snap_cram[i] & 0xEEE, best = i, bd = 1 << 30;
+            if ((V.cram[i] & 0xEEE) != c)
+                for (int j = 0; j < 64; j++) {
+                    int d = V.cram[j] & 0xEEE, dr = (d & 0xE) - (c & 0xE), dg = ((d >> 4) & 0xE) - ((c >> 4) & 0xE), db = ((d >> 8) & 0xE) - ((c >> 8) & 0xE);
+                    int e = dr * dr * 3 + dg * dg * 4 + db * db * 2;
+                    if ((j & 15) && e < bd) { bd = e; best = j; }   /* colour 0 of a line is transparent */
+                }
+            pal_map[i] = (uint8_t)best;
+        }
     /* windows/dialogs over the field: keep painting from the snapshot */
     int ok = verify(snap_maps, snap_blocks, snap_wa, snap_ha, snap_wb, snap_hb, snap_maskb) >= 40;
     if (g_ws_ext == 0) { ps4_field_live_any = ok; return 0; }   /* probing only */
@@ -205,7 +248,9 @@ static uint8_t ws_pixel(int plane, int sx, int line)
                      plane ? snap_maskb : 0xBFFF, wx, wy);
     if (t < 0) return 0;
     if (g_hd_track) g_ws_src = vdp_make_src((uint16_t)t, wx & 7, wy & 7);
-    return ps4_field_live ? vdp_tile_pixel((uint16_t)t, wx & 7, wy & 7) : snap_tile_pixel((uint16_t)t, wx & 7, wy & 7);
+    if (ps4_field_live || !vram_snap_ok) return vdp_tile_pixel((uint16_t)t, wx & 7, wy & 7);
+    uint8_t p = snap_tile_pixel((uint16_t)t, wx & 7, wy & 7);
+    return p ? (uint8_t)((p & 0xC0) | pal_map[p & 0x3F]) : 0;
 }
 
 /* The game culls sprite pieces outside the 320-pixel view; widen the test

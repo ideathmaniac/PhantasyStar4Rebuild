@@ -99,6 +99,7 @@ uint8_t  vdp_tile_pixel(uint16_t ent, int px, int py);
  * field map is showing); if so, pixels outside the 320-wide VDP view come
  * from g_ws_pixel() (painted from the game's map data). */
 extern int32_t g_ws_ext;
+extern int     g_ws_side_sprites;                    /* 0: keep the widened columns free of sprites (set by g_ws_begin) */
 extern int     g_ws_frame_ext;                       /* ext used for the frame being drawn */
 extern int   (*g_ws_begin)(void);                    /* 1: draw this frame wide */
 extern uint8_t (*g_ws_pixel)(int plane, int sx, int line);
