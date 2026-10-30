@@ -314,8 +314,13 @@ typedef struct {
 static world_t worlds[WORLDS];
 static world_t *world_for(int id, int w, int h)
 {
-    for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == id) return &worlds[i];
-    for (int i = 0; i < WORLDS; i++) if (!worlds[i].w) { memset(&worlds[i], 0, sizeof worlds[i]); worlds[i].id = id; worlds[i].w = w; worlds[i].h = h; return &worlds[i]; }
+    for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == id && worlds[i].w == w && worlds[i].h == h) return &worlds[i];
+    /* a free slot; slots of other maps (kept by older versions: large dungeons) or of
+     * this map with another size are reused */
+    for (int i = 0; i < WORLDS; i++)
+        if (!worlds[i].w || worlds[i].id > 2 || worlds[i].id == id) {
+            memset(&worlds[i], 0, sizeof worlds[i]); worlds[i].id = id; worlds[i].w = w; worlds[i].h = h; return &worlds[i];
+        }
     return 0;
 }
 static void block_colours(world_t *W, int plane, int blk, int mask)
@@ -399,7 +404,7 @@ static void world_capture(void)
 }
 int ps4_world_pick = -1;   /* the planet to show, -1: where the party is */
 /* 1 if that planet's map has been seen */
-int ps4_world_known(int planet) { for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == planet) return 1; return 0; }
+int ps4_world_known(int planet) { for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == planet && planet <= 2) return 1; return 0; }
 /* the whole world map, one pixel per tile (w*4 x h*4): the planet the party
  * is on, or the last one visited; unexplored parts darker. *px < 0: the
  * party is not on it. 0 if no planet map is known */
@@ -411,11 +416,11 @@ int ps4_world_image(uint32_t *out, int maxw, int maxh, int *ow, int *oh, int *px
         for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == ps4_world_pick) W = &worlds[i];
         if (W) here = 0;
     }
-    if (!W) for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == id) W = &worlds[i];
+    if (!W && id <= 2) for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == id) W = &worlds[i];
     if (!W) {
         here = 0;
         for (int i = 0; i < WORLDS; i++) if (worlds[i].w && worlds[i].id == last_world) W = &worlds[i];
-        for (int i = 0; i < WORLDS && !W; i++) if (worlds[i].w) W = &worlds[i];
+        for (int i = 0; i < WORLDS && !W; i++) if (worlds[i].w && worlds[i].id <= 2) W = &worlds[i];
     }
     if (!W || W->w * 4 > maxw || W->h * 4 > maxh) return 0;
     int H = W->h;
